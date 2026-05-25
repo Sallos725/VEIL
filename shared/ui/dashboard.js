@@ -7,10 +7,16 @@ import {
 } from "./labels.js";
 import {
   makeGuidance,
-  checkDisclosure,
   getAllowedDisclosures,
   advanceRevealStage,
 } from "../core.js";
+import {
+  checkDisclosureLite,
+  checkDisclosureFull,
+  redactDraft,
+} from "../veil-service.js";
+import { getPromptSnippet } from "./prompt-snippet.js";
+import { VEIL_RELEASE_TAG } from "../plugin-meta.js";
 import { VEIL_STAGE_ORDER } from "../revealStages.js";
 import { loadDbActors, fillSelect, buildContextFromFields } from "./db-actors.js";
 import { mountScanPanel } from "./scan-panel.js";
@@ -79,9 +85,28 @@ export async function openDashboard(doc, ctx) {
   let activeTab = "secrets";
   let status = store.getStatus();
 
+  if (edition === "full" && store.refreshHealth) {
+    await store.refreshHealth();
+    status = store.getStatus();
+  }
+
   const bindResult = await resolveChatBindingSafe(Risuai);
   const binding = bindResult.binding;
-  if (binding) {
+  const fullBlocked =
+    edition === "full" && (!status.sidecarOnline || status.readOnly);
+
+  function guardWrite() {
+    if (fullBlocked) {
+      alert(
+        status.error ||
+          "VEIL Full은 sidecar가 필요합니다. sidecar를 실행한 뒤 다시 여세요."
+      );
+      return false;
+    }
+    return true;
+  }
+
+  if (binding && !fullBlocked) {
     const migrated = migrateUnboundSecretsToBinding(secrets, binding);
     if (migrated > 0) await store.save(secrets);
   }
@@ -127,11 +152,6 @@ export async function openDashboard(doc, ctx) {
     return filterSecretsForBinding(secrets, view);
   }
 
-  if (edition === "full" && store.refreshHealth) {
-    await store.refreshHealth();
-    status = store.getStatus();
-  }
-
   const root = doc.createElement("div");
   root.className = "veil-app";
   doc.body.innerHTML = "";
@@ -143,7 +163,10 @@ export async function openDashboard(doc, ctx) {
     el("h1", { className: "veil-title", text: "VEIL — 비밀 공개 관리" }),
     el("p", {
       className: "veil-sub",
-      text: "단계에 맞게 비밀을 암시하고, 스포일러를 막습니다.",
+      text:
+        edition === "full"
+          ? "Full · sidecar 필수 — 대시보드 GUI (MCP 미사용)"
+          : "Lite · 로컬 저장 — 대시보드 GUI (MCP 미사용)",
     }),
   ]);
   const chips = el("div", { className: "veil-chips" });
@@ -157,7 +180,7 @@ export async function openDashboard(doc, ctx) {
   chips.appendChild(
     el("span", {
       className: "chip",
-      text: edition === "full" ? "Full" : "Lite",
+      text: edition === "full" ? "Full · sidecar" : "Lite · local",
     })
   );
   const storageChip = el("span", {
@@ -194,6 +217,46 @@ export async function openDashboard(doc, ctx) {
   });
   root.appendChild(bindBanner);
 
+  if (fullBlocked) {
+    const gate = el("div", { className: "card veil-sidecar-gate" });
+    gate.appendChild(el("h3", { text: "Sidecar 연결 필요" }));
+    gate.appendChild(
+      el("p", {
+        text: "VEIL Full은 HTTP sidecar 없이 동작하지 않습니다. 아래 순서로 sidecar를 실행한 뒤 VEIL을 다시 여세요.",
+      })
+    );
+    gate.appendChild(
+      el("pre", {
+        className: "veil-code",
+        text: `docker pull ghcr.io/sallos725/veil-sidecar:${VEIL_RELEASE_TAG}
+cd full
+docker compose -f docker-compose.release.yml up -d
+curl http://127.0.0.1:6010/health`,
+      })
+    );
+    gate.appendChild(
+      el("p", {
+        className: "veil-sub",
+        text: "플러그인만으로 RP하는 Lite가 필요하면 veil-lite.js를 사용하세요.",
+      })
+    );
+    gate.appendChild(
+      el("button", {
+        className: "btn btn-primary",
+        text: "연결 다시 확인",
+        onclick: async () => {
+          if (store.refreshHealth) {
+            await store.refreshHealth();
+            status = store.getStatus();
+            if (status.sidecarOnline) location.reload();
+            else alert("아직 sidecar에 연결되지 않았습니다.");
+          }
+        },
+      })
+    );
+    root.appendChild(gate);
+  }
+
   if (!bindResult.ok) {
     const guideCard = el("div", { className: "card" });
     guideCard.appendChild(
@@ -226,13 +289,29 @@ export async function openDashboard(doc, ctx) {
 
   const tabs = el("div", { className: "veil-tabs" });
   const panels = {};
-  const tabNames = [
-    ["secrets", "시크릿"],
-    ["check", "검사"],
-    ["guide", "가이드"],
-    ["scan", "스캔"],
-    ["settings", "LLM 설정"],
-  ];
+  const tabNames = fullBlocked
+    ? [
+        ["secrets", "시크릿"],
+        ["help", "안내"],
+      ]
+    : edition === "full"
+      ? [
+          ["secrets", "시크릿"],
+          ["check", "검사"],
+          ["redact", "수정"],
+          ["guide", "가이드"],
+          ["scan", "스캔"],
+          ["settings", "LLM 설정"],
+          ["help", "안내"],
+        ]
+      : [
+          ["secrets", "시크릿"],
+          ["check", "검사"],
+          ["guide", "가이드"],
+          ["scan", "스캔"],
+          ["settings", "LLM 설정"],
+          ["help", "안내"],
+        ];
 
   function setTab(name) {
     activeTab = name;
@@ -289,6 +368,7 @@ export async function openDashboard(doc, ctx) {
         className: "btn btn-secondary",
         text: "이 세션 데이터 전체 삭제",
         onclick: async () => {
+          if (!guardWrite()) return;
           const view = resolveViewBinding();
           const n = filterSecretsForBinding(secrets, view).length;
           if (
@@ -316,6 +396,7 @@ export async function openDashboard(doc, ctx) {
           className: "btn btn-secondary",
           text: `cid 키로 변환 (${migratable}개)`,
           onclick: async () => {
+            if (!guardWrite()) return;
             if (
               !confirm(
                 `인덱스 키(0:1 형식)로 묶인 시크릿 ${migratable}개를 Risu chat.id 기준 cid 키로 바꿀까요?`
@@ -377,26 +458,28 @@ export async function openDashboard(doc, ctx) {
       },
     })
   );
-  secretsToolbar.appendChild(
-    el("button", {
-      className: "btn btn-secondary",
-      text: "이 세션 가져오기",
-      onclick: () => {
-        if (!resolveViewBinding()) {
-          alert("채팅이 연결되지 않았습니다.");
-          return;
-        }
-        sessionImportInput.click();
-      },
-    })
-  );
-  secretsToolbar.appendChild(
-    el("button", {
-      className: "btn btn-secondary",
-      text: "전체 JSON 가져오기",
-      onclick: () => importInput.click(),
-    })
-  );
+  if (!fullBlocked) {
+    secretsToolbar.appendChild(
+      el("button", {
+        className: "btn btn-secondary",
+        text: "이 세션 가져오기",
+        onclick: () => {
+          if (!resolveViewBinding()) {
+            alert("채팅이 연결되지 않았습니다.");
+            return;
+          }
+          sessionImportInput.click();
+        },
+      })
+    );
+    secretsToolbar.appendChild(
+      el("button", {
+        className: "btn btn-secondary",
+        text: "전체 JSON 가져오기",
+        onclick: () => importInput.click(),
+      })
+    );
+  }
   secretsToolbar.appendChild(
     el("button", {
       className: "btn btn-secondary",
@@ -414,11 +497,13 @@ export async function openDashboard(doc, ctx) {
       },
     })
   );
+  if (!fullBlocked) {
   secretsToolbar.appendChild(
     el("button", {
       className: "btn btn-primary",
       text: "저장",
       onclick: async () => {
+        if (!guardWrite()) return;
         const result = await store.save(secrets);
         status = store.getStatus();
         storageChip.textContent = `저장: ${sourceLabelKo(status.source)}`;
@@ -436,12 +521,22 @@ export async function openDashboard(doc, ctx) {
       },
     })
   );
+  }
+  if (fullBlocked) {
+    secretsToolbar.appendChild(
+      el("p", {
+        className: "veil-sub",
+        text: "읽기 전용 — sidecar 연결 후 편집·저장이 가능합니다.",
+      })
+    );
+  }
   if (sessionBar.childNodes.length) panels.secrets.appendChild(sessionBar);
   panels.secrets.appendChild(secretsToolbar);
   panels.secrets.appendChild(importInput);
   panels.secrets.appendChild(sessionImportInput);
 
   sessionImportInput.addEventListener("change", async () => {
+    if (!guardWrite()) return;
     const file = sessionImportInput.files && sessionImportInput.files[0];
     if (!file) return;
     const view = resolveViewBinding();
@@ -478,6 +573,7 @@ export async function openDashboard(doc, ctx) {
   });
 
   importInput.addEventListener("change", async () => {
+    if (!guardWrite()) return;
     const file = importInput.files && importInput.files[0];
     if (!file) return;
     try {
@@ -601,6 +697,7 @@ export async function openDashboard(doc, ctx) {
             className: "btn btn-primary",
             text: `다음 단계 (${stageLabelKo(ns)})`,
             onclick: async () => {
+              if (!guardWrite()) return;
               const result = advanceRevealStage(secrets, secret.id, ns, {
                 manual: true,
                 reason: "gui",
@@ -641,6 +738,7 @@ export async function openDashboard(doc, ctx) {
 
       attachSecretEditorToCard(card, doc, secret, {
         onSave: async (updated) => {
+          if (!guardWrite()) return;
           const idx = secrets.findIndex((s) => s.id === secret.id);
           if (idx < 0) return;
           secrets[idx] = updated;
@@ -662,8 +760,6 @@ export async function openDashboard(doc, ctx) {
       : dbActors.error || "",
   });
 
-  // --- Check panel ---
-  const draftField = el("textarea", { placeholder: "검사할 초안 텍스트를 입력하세요." });
   const speakerField = dbActors.ok
     ? el("select", {})
     : el("input", { placeholder: "화자 ID (선택)" });
@@ -696,6 +792,10 @@ export async function openDashboard(doc, ctx) {
     listeners: listenersField,
     mode: modeField,
   };
+
+  // --- Check panel ---
+  if (!fullBlocked && panels.check) {
+  const draftField = el("textarea", { placeholder: "검사할 초안 텍스트를 입력하세요." });
   const checkResult = el("div", { className: "result" });
   panels.check.appendChild(actorHint);
   panels.check.appendChild(el("div", { className: "field" }, [el("label", { text: "초안" }), draftField]));
@@ -709,36 +809,59 @@ export async function openDashboard(doc, ctx) {
     el("div", { className: "field" }, [el("label", { text: "청자" }), listenersField])
   );
   panels.check.appendChild(el("div", { className: "field" }, [el("label", { text: "모드" }), modeField]));
-  panels.check.appendChild(
-    el("button", {
-      className: "btn btn-primary",
-      text: "공개 검사",
-      onclick: () => {
-        const ctxCheck = buildContextFromFields(contextFields, binding);
-        const result = checkDisclosure(
-          draftField.value,
-          ctxCheck,
-          getBoundSecrets()
-        );
-        checkResult.className = `result ${result.safe ? "safe" : "unsafe"}`;
-        const lines = [
-          `결과: ${result.safe ? "안전" : "위험"} (${riskLabelKo(result.risk_level)})`,
-        ];
-        if (result.violations.length) {
-          lines.push("", "위반 목록:");
-          for (const v of result.violations) {
-            lines.push("- " + formatViolation(v));
-            if (v.suggested_rewrite) lines.push("  → " + v.suggested_rewrite);
+    panels.check.appendChild(
+      el("button", {
+        className: "btn btn-primary",
+        text: edition === "full" ? "공개 검사 (sidecar)" : "공개 검사",
+        onclick: async () => {
+          const ctxCheck = buildContextFromFields(contextFields, binding);
+          ctxCheck.draft_text = draftField.value;
+          checkResult.textContent = "검사 중…";
+          checkResult.className = "result";
+          let result;
+          try {
+            if (edition === "full" && resolveSidecarUrl) {
+              const url = await resolveSidecarUrl(ctxCheck);
+              result = await checkDisclosureFull(
+                Risuai,
+                secrets,
+                ctxCheck,
+                url
+              );
+            } else {
+              result = await checkDisclosureLite(
+                Risuai,
+                secrets,
+                ctxCheck,
+                resolveSidecarUrl
+              );
+            }
+          } catch (e) {
+            checkResult.textContent = "검사 오류: " + (e?.message || e);
+            return;
           }
-        }
-        checkResult.textContent = lines.join("\n");
-        if (!panels.check.contains(checkResult)) panels.check.appendChild(checkResult);
-      },
-    })
-  );
-  panels.check.appendChild(checkResult);
+          checkResult.className = `result ${result.safe ? "safe" : "unsafe"}`;
+          const lines = [
+            `결과: ${result.safe ? "안전" : "위험"} (${riskLabelKo(result.risk_level)})`,
+          ];
+          if (result.sidecar_assisted) lines.push("(sidecar semantic 보조)");
+          if (result.violations?.length) {
+            lines.push("", "위반 목록:");
+            for (const v of result.violations) {
+              lines.push("- " + formatViolation(v));
+              if (v.suggested_rewrite) lines.push("  → " + v.suggested_rewrite);
+            }
+          }
+          checkResult.textContent = lines.join("\n");
+          if (!panels.check.contains(checkResult)) panels.check.appendChild(checkResult);
+        },
+      })
+    );
+    panels.check.appendChild(checkResult);
+  }
 
   // --- Guide panel ---
+  if (!fullBlocked && panels.guide) {
   const inputField = el("textarea", { placeholder: "유저 입력 또는 장면 키워드" });
   const guideResult = el("div", { className: "result" });
   panels.guide.appendChild(
@@ -780,8 +903,115 @@ export async function openDashboard(doc, ctx) {
     })
   );
   panels.guide.appendChild(guideResult);
+  }
 
-  mountScanPanel(panels.scan, {
+  if (!fullBlocked && edition === "full" && panels.redact) {
+    const redactDraftField = el("textarea", {
+      placeholder: "수정할 초안 텍스트",
+    });
+    const redactStage = el("select", {}, []);
+    for (const stage of VEIL_STAGE_ORDER) {
+      redactStage.appendChild(
+        el("option", { value: stage, text: stageLabelKo(stage) })
+      );
+    }
+    redactStage.value = "hint";
+    const redactResult = el("div", { className: "result" });
+    panels.redact.appendChild(
+      el("p", {
+        className: "veil-sub",
+        text: "허용 단계에 맞게 초안을 줄이거나 바꿉니다 (sidecar /rewrite 보조).",
+      })
+    );
+    panels.redact.appendChild(
+      el("div", { className: "field" }, [el("label", { text: "초안" }), redactDraftField])
+    );
+    panels.redact.appendChild(
+      el("div", { className: "field" }, [el("label", { text: "목표 단계" }), redactStage])
+    );
+    panels.redact.appendChild(
+      el("button", {
+        className: "btn btn-primary",
+        text: "수정 가이드 생성",
+        onclick: async () => {
+          const ctxRedact = buildContextFromFields(contextFields, binding);
+          ctxRedact.draft_text = redactDraftField.value;
+          ctxRedact.target_stage = redactStage.value;
+          redactResult.textContent = "처리 중…";
+          try {
+            const url = resolveSidecarUrl
+              ? await resolveSidecarUrl(ctxRedact)
+              : "";
+            const result = await redactDraft(
+              Risuai,
+              secrets,
+              ctxRedact,
+              url,
+              { useSidecar: true }
+            );
+            const lines = [
+              result.redacted_text || "(텍스트 없음)",
+              "",
+              result.explanation || "",
+              `잔여 위험: ${riskLabelKo(result.remaining_risk || "none")}`,
+            ];
+            if (result.sidecar_assisted) lines.unshift("(sidecar rewrite 적용)");
+            redactResult.textContent = lines.join("\n");
+            redactResult.className = "result safe";
+          } catch (e) {
+            redactResult.textContent = "오류: " + (e?.message || e);
+          }
+          if (!panels.redact.contains(redactResult)) {
+            panels.redact.appendChild(redactResult);
+          }
+        },
+      })
+    );
+    panels.redact.appendChild(redactResult);
+  } else if (panels.redact) {
+    panels.redact.appendChild(
+      el("p", {
+        className: "veil-sub",
+        text:
+          edition === "full"
+            ? "sidecar 연결 후 사용할 수 있습니다."
+            : "VEIL Lite에는 수정 탭이 없습니다. Full + sidecar를 사용하세요.",
+      })
+    );
+  }
+
+  const snippetArea = el("textarea", {
+    className: "veil-textarea",
+    rows: "8",
+    value: getPromptSnippet("ko"),
+  });
+  snippetArea.readOnly = true;
+  panels.help.appendChild(
+    el("p", {
+      className: "veil-sub",
+      text: "캐릭터 카드·시스템 프롬프트에 붙여 넣으세요. VEIL은 MCP 도구가 아니라 대시보드 GUI로 사용합니다.",
+    })
+  );
+  panels.help.appendChild(snippetArea);
+  panels.help.appendChild(
+    el("button", {
+      className: "btn btn-primary",
+      text: "스니펫 복사",
+      onclick: async () => {
+        try {
+          await navigator.clipboard.writeText(snippetArea.value);
+          alert("복사되었습니다.");
+        } catch {
+          snippetArea.select();
+          doc.execCommand("copy");
+          alert("복사되었습니다 (수동).");
+        }
+      },
+    })
+  );
+
+  if (!fullBlocked) {
+    mountScanPanel(panels.scan, {
     Risuai,
     secrets,
     store,
@@ -791,8 +1021,13 @@ export async function openDashboard(doc, ctx) {
     binding,
     bindResult,
   });
+  } else {
+    panels.scan.appendChild(
+      el("p", { className: "veil-sub", text: "sidecar 연결 후 스캔을 사용할 수 있습니다." })
+    );
+  }
 
-  if (llmStore) {
+  if (llmStore && !fullBlocked) {
     mountLlmSettingsPanel(panels.settings, {
       Risuai,
       llmStore,
@@ -808,6 +1043,10 @@ export async function openDashboard(doc, ctx) {
         if (opts) pluginOptions = opts;
       },
     });
+  } else if (fullBlocked) {
+    panels.settings.appendChild(
+      el("p", { className: "veil-sub", text: "sidecar 연결 후 LLM 설정을 사용할 수 있습니다." })
+    );
   } else {
     panels.settings.appendChild(
       el("p", {

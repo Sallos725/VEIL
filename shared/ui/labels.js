@@ -12,6 +12,7 @@ export const SOURCE_LABELS_KO = {
   sidecar: "사이드카 저장",
   cache: "오프라인(로컬 캐시)",
   sample: "샘플 데이터",
+  unavailable: "sidecar 대기",
 };
 
 export function stageLabelKo(stage) {

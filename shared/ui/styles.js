@@ -215,6 +215,23 @@ textarea { min-height: 120px; resize: vertical; }
   font-size: 0.88rem;
   color: #b8c4e8;
 }
+.veil-sidecar-gate {
+  border-color: #6a5030;
+  background: #2a2218;
+  margin-bottom: 12px;
+}
+.veil-code {
+  display: block;
+  padding: 10px 12px;
+  margin: 8px 0;
+  border-radius: 6px;
+  background: #0e1220;
+  border: 1px solid #2e3a55;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
 .veil-app ol {
   margin: 8px 0 0;
   padding-left: 1.25rem;
