@@ -661,7 +661,7 @@ It may contain:
 - reveal stage utilities
 - matching utilities
 - disclosure checking
-- MCP registration
+- dashboard GUI (no registerMCP)
 ```
 
 Do not import Node modules.
@@ -681,22 +681,21 @@ Use only APIs confirmed in RisuAI plugin documentation.
 `full/plugin/veil-full.js` should:
 
 ```text
-- register the same VEIL MCP tools
-- include Lite deterministic fallback logic
-- optionally call sidecar through RisuAI-approved fetch API
-- gracefully degrade if sidecar is offline
+- dashboard GUI only (no registerMCP)
+- call sidecar via fetch (secrets SoT, semantic-check, rewrite, lorebook scan)
+- offline: read-only cache + setup gate in dashboard (no silent Lite fallback)
 ```
 
-The sidecar may provide:
+The sidecar provides:
 
 ```text
 - semantic matching
 - heavier redaction
 - optional local LLM judge
-- larger secret registry management
+- secrets persistence (Full SoT)
 ```
 
-The sidecar must not be mandatory.
+Full **requires** sidecar for writes and full dashboard features. Lite does not use sidecar.
 
 ---
 
@@ -851,7 +850,7 @@ Minimum tests:
 - check_disclosure detects direct spoiler leakage
 - redact_to_allowed_stage reduces spoiler level
 - Lite works without sidecar
-- Full degrades to Lite if sidecar is offline
+- Full blocks writes and limits dashboard when sidecar is offline (read-only cache)
 ```
 
 ---
