@@ -84,7 +84,7 @@ VEIL/
    - `getCurrentCharacterIndex()` / `getCurrentChatIndex()` — **try/catch** (미선택 시 Risu 내부 `chatPage` 크래시)
    - `getDatabase(['characters'])`로 캐릭터·`chats[chatPage]` 검증
 3. MCP·GUI는 현재 세션 `bindKey`만 사용 (`cid:…` 우선, 구데이터는 인덱스 키도 매칭)
-4. 시크릿 탭: **세션 선택**, 제목 수정·삭제·세션 전체 삭제
+4. 시크릿 탭: **세션 선택**, 제목 수정·삭제·세션 전체 삭제·**cid 키 일괄 변환** ([shared/chat-migration.js](../shared/chat-migration.js))
 
 ### 로어북 (RisuAI 데이터 모델)
 

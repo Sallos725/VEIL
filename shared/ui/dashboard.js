@@ -27,6 +27,10 @@ import {
   removeSecretById,
   removeSecretsForBinding,
 } from "../chat-binding.js";
+import {
+  countMigratableToCid,
+  migrateIndexSecretsToCid,
+} from "../chat-migration.js";
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -281,6 +285,36 @@ export async function openDashboard(doc, ctx) {
         },
       })
     );
+    const migratable = countMigratableToCid(
+      secrets,
+      characterRecord,
+      binding.charIndex
+    );
+    if (migratable > 0) {
+      sessionBar.appendChild(
+        el("button", {
+          className: "btn btn-secondary",
+          text: `cid 키로 변환 (${migratable}개)`,
+          onclick: async () => {
+            if (
+              !confirm(
+                `인덱스 키(0:1 형식)로 묶인 시크릿 ${migratable}개를 Risu chat.id 기준 cid 키로 바꿀까요?`
+              )
+            ) {
+              return;
+            }
+            const result = migrateIndexSecretsToCid(
+              secrets,
+              characterRecord,
+              binding.charIndex
+            );
+            await store.save(secrets);
+            alert(`변환 완료: ${result.migrated}개`);
+            renderSecretCards();
+          },
+        })
+      );
+    }
     if (!binding.chatSessionId) {
       sessionBar.appendChild(
         el("p", {
