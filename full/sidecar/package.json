@@ -1,10 +1,11 @@
 {
   "name": "veil-sidecar",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "VEIL_PORT=6010 node src/server.js",
+    "start:docker": "docker compose -f ../docker-compose.yml up -d --build"
   },
   "dependencies": {}
 }
