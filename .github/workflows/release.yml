@@ -65,12 +65,13 @@ jobs:
             type=semver,pattern={{version}},prefix=v
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
 
-      - name: Build and push sidecar image
+      - name: Build and push sidecar image (amd64 + arm64)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: full/sidecar/Dockerfile
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -80,7 +81,7 @@ jobs:
         run: |
           IMG="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
           IMG="${IMG,,}"
-          docker run -d --name veil-sidecar-smoke -p 16010:6010 "$IMG"
+          docker run -d --platform linux/amd64 --name veil-sidecar-smoke -p 16010:6010 "$IMG"
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:16010/health >/dev/null; then
               echo "health OK"

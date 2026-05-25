@@ -18,13 +18,15 @@ Health check: `http://127.0.0.1:6010/health`
 After a [GitHub Release](https://github.com/Sallos725/VEIL/releases), pull the sidecar from GHCR:
 
 ```bash
-docker pull ghcr.io/sallos725/veil-sidecar:v0.0.1   # use your release tag
+docker pull ghcr.io/sallos725/veil-sidecar:v0.0.1   # use your release tag (amd64 + arm64 from CI)
 cd full
 docker compose -f docker-compose.release.yml up -d
 docker compose -f docker-compose.release.yml down
 ```
 
 `docker-compose.release.yml` is generated in CI from `docker-compose.release.yml.template` (image tag = release tag).
+
+**ARM64 (Apple Silicon):** If pull fails with `no matching manifest for linux/arm64`, rebuild the tag via Release workflow or build locally: `docker build -f full/sidecar/Dockerfile -t veil-sidecar:local .` from repo root.
 
 ### Build from source (dev)
 
