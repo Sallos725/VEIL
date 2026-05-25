@@ -171,6 +171,43 @@ textarea { min-height: 120px; resize: vertical; }
   background: #12182a;
   color: #e8eaf0;
 }
+.veil-label {
+  display: block;
+  font-size: 0.78rem;
+  color: #9aa3c4;
+  margin: 8px 0 4px;
+}
+.veil-input,
+.veil-select,
+.veil-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #3a4a70;
+  background: #12182a;
+  color: #e8eaf0;
+  font-size: 0.88rem;
+}
+.veil-textarea {
+  min-height: 64px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.4;
+}
+.veil-textarea-sm {
+  min-height: 48px;
+}
+.veil-secret-editor {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #2e3a55;
+}
+.veil-secret-details summary {
+  cursor: pointer;
+  font-size: 0.88rem;
+  color: #b8c4e8;
+}
 .veil-app ol {
   margin: 8px 0 0;
   padding-left: 1.25rem;

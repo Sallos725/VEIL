@@ -86,6 +86,7 @@ VEIL/
 3. MCP·GUI는 현재 세션 `bindKey`만 사용 (`cid:…` 우선, 구데이터는 인덱스 키도 매칭)
 4. 시크릿 탭: **세션 선택**, 제목 수정·삭제·세션 전체 삭제·**cid 키 일괄 변환** ([shared/chat-migration.js](../shared/chat-migration.js))
 5. **이 세션보내기 / 이 세션 가져오기** — [shared/storage/session-secrets.js](../shared/storage/session-secrets.js) (`veilSessionExport` JSON). 전체 JSON은 모든 봇·세션 포함.
+6. 카드 **「상세 편집」** — [shared/ui/secret-editor.js](../shared/ui/secret-editor.js): fullSecret, revealLadder, knownBy, hardBlocks, tags
 
 ### 로어북 (RisuAI 데이터 모델)
 

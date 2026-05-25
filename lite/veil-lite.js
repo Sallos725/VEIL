@@ -1939,6 +1939,43 @@ textarea { min-height: 120px; resize: vertical; }
   background: #12182a;
   color: #e8eaf0;
 }
+.veil-label {
+  display: block;
+  font-size: 0.78rem;
+  color: #9aa3c4;
+  margin: 8px 0 4px;
+}
+.veil-input,
+.veil-select,
+.veil-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #3a4a70;
+  background: #12182a;
+  color: #e8eaf0;
+  font-size: 0.88rem;
+}
+.veil-textarea {
+  min-height: 64px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.4;
+}
+.veil-textarea-sm {
+  min-height: 48px;
+}
+.veil-secret-editor {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #2e3a55;
+}
+.veil-secret-details summary {
+  cursor: pointer;
+  font-size: 0.88rem;
+  color: #b8c4e8;
+}
 .veil-app ol {
   margin: 8px 0 0;
   padding-left: 1.25rem;
@@ -2948,8 +2985,291 @@ textarea { min-height: 120px; resize: vertical; }
     updateStatus(state, current, ctx.pluginOptions);
   }
 
-  // shared/ui/dashboard.js
+  // shared/chat-migration.js
+  function countMigratableToCid(secrets, character, charIndex) {
+    const sessions = listCharacterChatSessions(character, charIndex);
+    let count = 0;
+    for (const session of sessions) {
+      if (!session.chatSessionId) continue;
+      for (const secret of secrets) {
+        if (isLegacyIndexSecret(secret, session)) count += 1;
+      }
+    }
+    return count;
+  }
+  function isLegacyIndexSecret(secret, session) {
+    if (!session.chatSessionId) return false;
+    const legacy = session.bindKeyLegacy;
+    if (secret.bindKey === session.bindKey) return false;
+    if (secret.bindKey === legacy || secret.scopeId === legacy) return true;
+    if (secret.bindKeyLegacy === legacy && !secret.chatSessionId) return true;
+    return secretMatchesBinding(secret, {
+      bindKey: legacy,
+      matchKeys: [legacy],
+      characterId: session.characterId,
+      charIndex: session.chatIndex,
+      chatIndex: session.chatIndex,
+      characterName: "",
+      chatLabel: session.label,
+      label: session.label
+    });
+  }
+  function migrateIndexSecretsToCid(secrets, character, charIndex) {
+    const sessions = listCharacterChatSessions(character, charIndex);
+    const characterName = character.name || character.displayName || `\uCE90\uB9AD\uD130 #${charIndex}`;
+    let migrated = 0;
+    for (const session of sessions) {
+      if (!session.chatSessionId) continue;
+      for (const secret of secrets) {
+        if (!isLegacyIndexSecret(secret, session)) continue;
+        const binding = {
+          bindKey: session.bindKey,
+          bindKeyLegacy: session.bindKeyLegacy,
+          matchKeys: [session.bindKey, session.bindKeyLegacy],
+          chatSessionId: session.chatSessionId,
+          charIndex,
+          chatIndex: session.chatIndex,
+          characterId: session.characterId,
+          characterName,
+          chatLabel: session.label,
+          label: `${characterName} \xB7 ${session.label}`
+        };
+        Object.assign(secret, attachChatBinding(secret, binding));
+        secret.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+        migrated += 1;
+      }
+    }
+    return {
+      migrated,
+      sessionsWithId: sessions.filter((s) => s.chatSessionId).length,
+      sessionsIndexOnly: sessions.filter((s) => !s.chatSessionId).length
+    };
+  }
+
+  // shared/storage/session-secrets.js
+  var SESSION_EXPORT_VERSION = "1";
+  function exportSessionSecrets(secrets, viewBinding) {
+    const scoped = filterSecretsForBinding(secrets, viewBinding);
+    return {
+      veilSessionExport: SESSION_EXPORT_VERSION,
+      bindKey: viewBinding.bindKey,
+      bindKeyLegacy: viewBinding.bindKeyLegacy,
+      chatSessionId: viewBinding.chatSessionId,
+      characterId: viewBinding.characterId,
+      characterName: viewBinding.characterName,
+      chatLabel: viewBinding.chatLabel,
+      exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      secrets: JSON.parse(JSON.stringify(scoped))
+    };
+  }
+  function parseSessionImportPayload(parsed) {
+    if (!parsed || typeof parsed !== "object") {
+      return { ok: false, error: "JSON \uAC1D\uCCB4\uAC00 \uC544\uB2D9\uB2C8\uB2E4." };
+    }
+    const record = (
+      /** @type {Record<string, unknown>} */
+      parsed
+    );
+    let list = null;
+    if (record.veilSessionExport && Array.isArray(record.secrets)) {
+      list = record.secrets;
+    } else if (Array.isArray(parsed)) {
+      list = parsed;
+    } else if (Array.isArray(record.secrets)) {
+      list = record.secrets;
+    }
+    if (!validateSecrets(list)) {
+      return { ok: false, error: "\uC720\uD6A8\uD558\uC9C0 \uC54A\uC740 \uC2DC\uD06C\uB9BF \uBC30\uC5F4\uC785\uB2C8\uB2E4." };
+    }
+    return {
+      ok: true,
+      secrets: list,
+      meta: record.veilSessionExport ? {
+        bindKey: record.bindKey,
+        exportedAt: record.exportedAt,
+        chatLabel: record.chatLabel
+      } : null
+    };
+  }
+  function mergeSessionImport({ allSecrets, imported, viewBinding, mode }) {
+    const bound = imported.map((s) => attachChatBinding(s, viewBinding));
+    let removed = 0;
+    if (mode === "replace") {
+      const result = removeSecretsForBinding(allSecrets, viewBinding);
+      removed = result.removed;
+    }
+    let added = 0;
+    let updated = 0;
+    for (const secret of bound) {
+      const idx = allSecrets.findIndex((s) => s.id === secret.id);
+      if (idx >= 0) {
+        allSecrets[idx] = {
+          ...allSecrets[idx],
+          ...secret,
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        updated += 1;
+      } else {
+        allSecrets.push(secret);
+        added += 1;
+      }
+    }
+    return { ok: true, removed, added, updated, total: bound.length };
+  }
+
+  // shared/ui/secret-editor.js
   function el3(tag, attrs = {}, children = []) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "className") node.className = v;
+      else if (k === "value") node.value = v;
+      else if (k === "text") node.textContent = v;
+      else if (k.startsWith("on") && typeof v === "function") {
+        node.addEventListener(k.slice(2).toLowerCase(), v);
+      } else node.setAttribute(k, v);
+    }
+    for (const child of children) {
+      if (typeof child === "string") node.appendChild(document.createTextNode(child));
+      else if (child) node.appendChild(child);
+    }
+    return node;
+  }
+  function splitLines(text) {
+    if (!text || !String(text).trim()) return [];
+    return String(text).split(/\n/).map((s) => s.trim()).filter(Boolean);
+  }
+  function joinLines(arr) {
+    return Array.isArray(arr) ? arr.join("\n") : "";
+  }
+  function mountSecretEditor(doc, secret, opts) {
+    const wrap = el3("div", { className: "veil-secret-editor" });
+    const titleInput = el3("input", {
+      className: "veil-input",
+      type: "text",
+      value: secret.title || ""
+    });
+    wrap.appendChild(el3("label", { className: "veil-label", text: "\uC81C\uBAA9" }));
+    wrap.appendChild(titleInput);
+    const stageSelect = el3("select", { className: "veil-select" });
+    for (const stage of VEIL_STAGE_ORDER) {
+      const opt = el3("option", {
+        value: stage,
+        text: stageLabelKo(stage)
+      });
+      if (secret.revealStage === stage) opt.selected = true;
+      stageSelect.appendChild(opt);
+    }
+    wrap.appendChild(el3("label", { className: "veil-label", text: "\uACF5\uAC1C \uB2E8\uACC4" }));
+    wrap.appendChild(stageSelect);
+    const fullSecretArea = el3("textarea", {
+      className: "veil-textarea",
+      rows: "4",
+      value: secret.fullSecret || ""
+    });
+    wrap.appendChild(el3("label", { className: "veil-label", text: "\uC804\uCCB4 \uBE44\uBC00 (fullSecret)" }));
+    wrap.appendChild(fullSecretArea);
+    const ladderFields = [
+      ["foreshadow", "\uC554\uC2DC (foreshadow, \uC904\uB9C8\uB2E4)"],
+      ["hint", "\uB2E8\uC11C (hint)"],
+      ["partial", "\uBD80\uBD84 (partial)"],
+      ["nearReveal", "\uAC70\uC758 \uACF5\uAC1C (nearReveal)"]
+    ];
+    const ladderAreas = {};
+    for (const [key, label] of ladderFields) {
+      const area = el3("textarea", {
+        className: "veil-textarea veil-textarea-sm",
+        rows: "2",
+        value: joinLines(secret.revealLadder?.[key])
+      });
+      ladderAreas[key] = area;
+      wrap.appendChild(el3("label", { className: "veil-label", text: label }));
+      wrap.appendChild(area);
+    }
+    const revealedArea = el3("textarea", {
+      className: "veil-textarea veil-textarea-sm",
+      rows: "2",
+      value: secret.revealLadder?.revealed || ""
+    });
+    wrap.appendChild(el3("label", { className: "veil-label", text: "\uC644\uC804 \uACF5\uAC1C (revealed)" }));
+    wrap.appendChild(revealedArea);
+    const knownInput = el3("input", {
+      className: "veil-input",
+      type: "text",
+      value: (secret.knownBy || []).join(", ")
+    });
+    const unknownInput = el3("input", {
+      className: "veil-input",
+      type: "text",
+      value: (secret.unknownBy || []).join(", ")
+    });
+    const hardInput = el3("input", {
+      className: "veil-input",
+      type: "text",
+      value: (secret.hardBlocks || []).join(", ")
+    });
+    const tagsInput = el3("input", {
+      className: "veil-input",
+      type: "text",
+      value: (secret.tags || []).join(", ")
+    });
+    wrap.appendChild(el3("label", { className: "veil-label", text: "\uC54E (knownBy, \uC27C\uD45C)" }));
+    wrap.appendChild(knownInput);
+    wrap.appendChild(el3("label", { className: "veil-label", text: "\uBAA8\uB984 (unknownBy)" }));
+    wrap.appendChild(unknownInput);
+    wrap.appendChild(el3("label", { className: "veil-label", text: "\uAE08\uC9C0 \uD45C\uD604 (hardBlocks)" }));
+    wrap.appendChild(hardInput);
+    wrap.appendChild(el3("label", { className: "veil-label", text: "\uD0DC\uADF8" }));
+    wrap.appendChild(tagsInput);
+    const statusEl = el3("p", { className: "veil-sub", text: "" });
+    wrap.appendChild(
+      el3("button", {
+        className: "btn btn-primary",
+        text: "\uD3B8\uC9D1 \uB0B4\uC6A9 \uC800\uC7A5",
+        onclick: async () => {
+          const title = titleInput.value.trim();
+          if (!title) {
+            statusEl.textContent = "\uC81C\uBAA9\uC744 \uC785\uB825\uD558\uC138\uC694.";
+            return;
+          }
+          const next = {
+            ...secret,
+            title,
+            revealStage: stageSelect.value,
+            fullSecret: fullSecretArea.value.trim(),
+            revealLadder: {
+              foreshadow: splitLines(ladderAreas.foreshadow.value),
+              hint: splitLines(ladderAreas.hint.value),
+              partial: splitLines(ladderAreas.partial.value),
+              nearReveal: splitLines(ladderAreas.nearReveal.value),
+              revealed: revealedArea.value.trim() || void 0
+            },
+            knownBy: splitLines(knownInput.value.replace(/,/g, "\n")),
+            unknownBy: splitLines(unknownInput.value.replace(/,/g, "\n")),
+            hardBlocks: splitLines(hardInput.value.replace(/,/g, "\n")),
+            tags: splitLines(tagsInput.value.replace(/,/g, "\n")),
+            updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+          };
+          try {
+            await opts.onSave(next);
+            statusEl.textContent = "\uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4.";
+          } catch (e) {
+            statusEl.textContent = e?.message || String(e);
+          }
+        }
+      })
+    );
+    wrap.appendChild(statusEl);
+    return wrap;
+  }
+  function attachSecretEditorToCard(card, doc, secret, opts) {
+    const details = el3("details", { className: "details veil-secret-details" });
+    details.appendChild(el3("summary", { text: "\uC0C1\uC138 \uD3B8\uC9D1" }));
+    details.appendChild(mountSecretEditor(doc, secret, opts));
+    card.appendChild(details);
+  }
+
+  // shared/ui/dashboard.js
+  function el4(tag, attrs = {}, children = []) {
     const node = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {
       if (k === "className") node.className = v;
@@ -3035,29 +3355,29 @@ textarea { min-height: 120px; resize: vertical; }
     doc.body.innerHTML = "";
     doc.head.innerHTML = `<meta charset="utf-8"><style>${DASHBOARD_CSS}</style>`;
     doc.body.appendChild(root);
-    const header = el3("div", { className: "veil-header" });
-    const titleBlock = el3("div", {}, [
-      el3("h1", { className: "veil-title", text: "VEIL \u2014 \uBE44\uBC00 \uACF5\uAC1C \uAD00\uB9AC" }),
-      el3("p", {
+    const header = el4("div", { className: "veil-header" });
+    const titleBlock = el4("div", {}, [
+      el4("h1", { className: "veil-title", text: "VEIL \u2014 \uBE44\uBC00 \uACF5\uAC1C \uAD00\uB9AC" }),
+      el4("p", {
         className: "veil-sub",
         text: "\uB2E8\uACC4\uC5D0 \uB9DE\uAC8C \uBE44\uBC00\uC744 \uC554\uC2DC\uD558\uACE0, \uC2A4\uD3EC\uC77C\uB7EC\uB97C \uB9C9\uC2B5\uB2C8\uB2E4."
       })
     ]);
-    const chips = el3("div", { className: "veil-chips" });
-    const storageChip = el3("span", {
+    const chips = el4("div", { className: "veil-chips" });
+    const storageChip = el4("span", {
       className: "chip",
       text: `\uC800\uC7A5: ${sourceLabelKo(status.source)}`
     });
     chips.appendChild(storageChip);
     let sidecarChip = null;
     if (edition === "full") {
-      sidecarChip = el3("span", {
+      sidecarChip = el4("span", {
         className: `chip ${status.sidecarOnline ? "ok" : "off"}`,
         text: status.sidecarOnline ? "\uC0AC\uC774\uB4DC\uCE74 \uC5F0\uACB0\uB428" : "\uC0AC\uC774\uB4DC\uCE74 \uC624\uD504\uB77C\uC778"
       });
       chips.appendChild(sidecarChip);
     }
-    const closeBtn = el3("button", {
+    const closeBtn = el4("button", {
       className: "btn btn-secondary",
       text: "\uB2EB\uAE30",
       onclick: async () => {
@@ -3068,33 +3388,33 @@ textarea { min-height: 120px; resize: vertical; }
     header.appendChild(chips);
     header.appendChild(closeBtn);
     root.appendChild(header);
-    const bindBanner = el3("div", {
+    const bindBanner = el4("div", {
       className: bindResult.ok ? "veil-bind-banner" : "veil-bind-banner warn",
       text: bindingBannerText(bindResult)
     });
     root.appendChild(bindBanner);
     if (!bindResult.ok) {
-      const guideCard = el3("div", { className: "card" });
+      const guideCard = el4("div", { className: "card" });
       guideCard.appendChild(
-        el3("h3", { text: "\uCC44\uD305 \uC5F0\uACB0\uC774 \uD544\uC694\uD569\uB2C8\uB2E4" })
+        el4("h3", { text: "\uCC44\uD305 \uC5F0\uACB0\uC774 \uD544\uC694\uD569\uB2C8\uB2E4" })
       );
       guideCard.appendChild(
-        el3("p", { text: bindResult.userMessage || BINDING_GUIDE })
+        el4("p", { text: bindResult.userMessage || BINDING_GUIDE })
       );
       guideCard.appendChild(
-        el3("ol", {}, [
-          el3("li", {
+        el4("ol", {}, [
+          el4("li", {
             text: "RisuAI \uC67C\uCABD\uC5D0\uC11C \uC0AC\uC6A9\uD560 \uBD07(\uCE90\uB9AD\uD130)\uC744 \uC120\uD0DD\uD569\uB2C8\uB2E4."
           }),
-          el3("li", { text: "\uD574\uB2F9 \uBD07\uC758 \uCC44\uD305\uC744 \uC5F0 \uC0C1\uD0DC\uB85C \uB461\uB2C8\uB2E4." }),
-          el3("li", {
+          el4("li", { text: "\uD574\uB2F9 \uBD07\uC758 \uCC44\uD305\uC744 \uC5F0 \uC0C1\uD0DC\uB85C \uB461\uB2C8\uB2E4." }),
+          el4("li", {
             text: "\uD584\uBC84\uAC70 \uBA54\uB274 \uB610\uB294 \uCC44\uD305 \uB3C4\uAD6C \uBAA8\uC74C \u2192 VEIL\uC744 \uB2E4\uC2DC \uC5FD\uB2C8\uB2E4."
           })
         ])
       );
       if (bindResult.detail) {
         guideCard.appendChild(
-          el3("p", {
+          el4("p", {
             className: "veil-sub",
             text: `\uAE30\uC220 \uC815\uBCF4: ${bindResult.detail}`
           })
@@ -3102,7 +3422,7 @@ textarea { min-height: 120px; resize: vertical; }
       }
       root.appendChild(guideCard);
     }
-    const tabs = el3("div", { className: "veil-tabs" });
+    const tabs = el4("div", { className: "veil-tabs" });
     const panels = {};
     const tabNames = [
       ["secrets", "\uC2DC\uD06C\uB9BF"],
@@ -3121,29 +3441,29 @@ textarea { min-height: 120px; resize: vertical; }
       });
     }
     for (const [id, label] of tabNames) {
-      const btn = el3("button", {
+      const btn = el4("button", {
         className: `veil-tab${id === activeTab ? " active" : ""}`,
         text: label,
         "data-tab": id,
         onclick: () => setTab(id)
       });
       tabs.appendChild(btn);
-      panels[id] = el3("div", { className: `veil-panel${id === activeTab ? " active" : ""}` });
+      panels[id] = el4("div", { className: `veil-panel${id === activeTab ? " active" : ""}` });
       root.appendChild(panels[id]);
     }
     root.insertBefore(tabs, panels.secrets);
-    const sessionBar = el3("div", { className: "veil-session-bar" });
+    const sessionBar = el4("div", { className: "veil-session-bar" });
     if (binding && characterRecord) {
       const sessions = listCharacterChatSessions(
         characterRecord,
         binding.charIndex
       );
       const stored = summarizeSecretSessions(secrets, binding.characterId);
-      const sessionSelect = el3("select", { className: "veil-select" });
+      const sessionSelect = el4("select", { className: "veil-select" });
       for (const s of sessions) {
         const storedEntry = stored.find((x) => x.bindKey === s.bindKey);
         const count = storedEntry?.count || 0;
-        const opt = el3("option", {
+        const opt = el4("option", {
           value: s.bindKey,
           text: `${s.label} (${count}\uAC1C)${s.chatSessionId ? "" : " \xB7 \uC778\uB371\uC2A4"}`
         });
@@ -3155,11 +3475,11 @@ textarea { min-height: 120px; resize: vertical; }
         renderSecretCards();
       });
       sessionBar.appendChild(
-        el3("label", { className: "veil-sub", text: "\uC138\uC158: " })
+        el4("label", { className: "veil-sub", text: "\uC138\uC158: " })
       );
       sessionBar.appendChild(sessionSelect);
       sessionBar.appendChild(
-        el3("button", {
+        el4("button", {
           className: "btn btn-secondary",
           text: "\uC774 \uC138\uC158 \uB370\uC774\uD130 \uC804\uCCB4 \uC0AD\uC81C",
           onclick: async () => {
@@ -3176,29 +3496,98 @@ textarea { min-height: 120px; resize: vertical; }
           }
         })
       );
+      const migratable = countMigratableToCid(
+        secrets,
+        characterRecord,
+        binding.charIndex
+      );
+      if (migratable > 0) {
+        sessionBar.appendChild(
+          el4("button", {
+            className: "btn btn-secondary",
+            text: `cid \uD0A4\uB85C \uBCC0\uD658 (${migratable}\uAC1C)`,
+            onclick: async () => {
+              if (!confirm(
+                `\uC778\uB371\uC2A4 \uD0A4(0:1 \uD615\uC2DD)\uB85C \uBB36\uC778 \uC2DC\uD06C\uB9BF ${migratable}\uAC1C\uB97C Risu chat.id \uAE30\uC900 cid \uD0A4\uB85C \uBC14\uAFC0\uAE4C\uC694?`
+              )) {
+                return;
+              }
+              const result = migrateIndexSecretsToCid(
+                secrets,
+                characterRecord,
+                binding.charIndex
+              );
+              await store.save(secrets);
+              alert(`\uBCC0\uD658 \uC644\uB8CC: ${result.migrated}\uAC1C`);
+              renderSecretCards();
+            }
+          })
+        );
+      }
       if (!binding.chatSessionId) {
         sessionBar.appendChild(
-          el3("p", {
+          el4("p", {
             className: "veil-sub",
             text: "\uC774 \uCC44\uD305\uC5D0 Risu chat.id\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4. \uCC44\uD305\uC744 \uD55C \uBC88 \uC800\uC7A5\xB7\uB3D9\uAE30\uD654\uD558\uBA74 cid \uD0A4\uB85C \uACE0\uC815\uB429\uB2C8\uB2E4."
           })
         );
       }
     }
-    const secretsToolbar = el3("div", { className: "toolbar" });
-    const importInput = el3("input", { type: "file", accept: "application/json,.json" });
+    const secretsToolbar = el4("div", { className: "toolbar" });
+    const importInput = el4("input", { type: "file", accept: "application/json,.json" });
     importInput.style.display = "none";
+    const sessionImportInput = el4("input", {
+      type: "file",
+      accept: "application/json,.json"
+    });
+    sessionImportInput.style.display = "none";
     secretsToolbar.appendChild(
-      el3("button", {
+      el4("button", {
         className: "btn btn-secondary",
-        text: "JSON \uAC00\uC838\uC624\uAE30",
+        text: "\uC774 \uC138\uC158\uBCF4\uB0B4\uAE30",
+        onclick: async () => {
+          const view = resolveViewBinding();
+          if (!view) {
+            alert("\uCC44\uD305\uC774 \uC5F0\uACB0\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+            return;
+          }
+          const payload = exportSessionSecrets(secrets, view);
+          const blob = new Blob([JSON.stringify(payload, null, 2)], {
+            type: "application/json"
+          });
+          const safeLabel = (view.chatLabel || "session").replace(/[^\w.-]+/g, "_");
+          const a = doc.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = `veil-session-${safeLabel}.json`;
+          a.click();
+          URL.revokeObjectURL(a.href);
+        }
+      })
+    );
+    secretsToolbar.appendChild(
+      el4("button", {
+        className: "btn btn-secondary",
+        text: "\uC774 \uC138\uC158 \uAC00\uC838\uC624\uAE30",
+        onclick: () => {
+          if (!resolveViewBinding()) {
+            alert("\uCC44\uD305\uC774 \uC5F0\uACB0\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+            return;
+          }
+          sessionImportInput.click();
+        }
+      })
+    );
+    secretsToolbar.appendChild(
+      el4("button", {
+        className: "btn btn-secondary",
+        text: "\uC804\uCCB4 JSON \uAC00\uC838\uC624\uAE30",
         onclick: () => importInput.click()
       })
     );
     secretsToolbar.appendChild(
-      el3("button", {
+      el4("button", {
         className: "btn btn-secondary",
-        text: "JSON\uBCF4\uB0B4\uAE30",
+        text: "\uC804\uCCB4 JSON\uBCF4\uB0B4\uAE30",
         onclick: async () => {
           const data = await store.exportSecrets();
           const blob = new Blob([JSON.stringify(data, null, 2)], {
@@ -3206,14 +3595,14 @@ textarea { min-height: 120px; resize: vertical; }
           });
           const a = doc.createElement("a");
           a.href = URL.createObjectURL(blob);
-          a.download = "veil-secrets.json";
+          a.download = "veil-secrets-all.json";
           a.click();
           URL.revokeObjectURL(a.href);
         }
       })
     );
     secretsToolbar.appendChild(
-      el3("button", {
+      el4("button", {
         className: "btn btn-primary",
         text: "\uC800\uC7A5",
         onclick: async () => {
@@ -3233,6 +3622,42 @@ textarea { min-height: 120px; resize: vertical; }
     if (sessionBar.childNodes.length) panels.secrets.appendChild(sessionBar);
     panels.secrets.appendChild(secretsToolbar);
     panels.secrets.appendChild(importInput);
+    panels.secrets.appendChild(sessionImportInput);
+    sessionImportInput.addEventListener("change", async () => {
+      const file = sessionImportInput.files && sessionImportInput.files[0];
+      if (!file) return;
+      const view = resolveViewBinding();
+      if (!view) {
+        alert("\uCC44\uD305\uC774 \uC5F0\uACB0\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+        sessionImportInput.value = "";
+        return;
+      }
+      try {
+        const parsed = JSON.parse(await file.text());
+        const parsedResult = parseSessionImportPayload(parsed);
+        if (!parsedResult.ok) {
+          alert(parsedResult.error || "\uAC00\uC838\uC624\uAE30 \uC2E4\uD328");
+          return;
+        }
+        const replace = confirm(
+          "\uD655\uC778 = \uC774 \uC138\uC158\uC758 \uAE30\uC874 \uC2DC\uD06C\uB9BF\uC744 \uC9C0\uC6B0\uACE0 \uAC00\uC838\uC628 \uBAA9\uB85D\uC73C\uB85C \uAD50\uCCB4\n\uCDE8\uC18C = \uAC19\uC740 id\uB294 \uB36E\uC5B4\uC4F0\uACE0 \uB098\uBA38\uC9C0\uB294 \uC720\uC9C0(\uBCD1\uD569)"
+        );
+        const result = mergeSessionImport({
+          allSecrets: secrets,
+          imported: parsedResult.secrets,
+          viewBinding: view,
+          mode: replace ? "replace" : "merge"
+        });
+        await store.save(secrets);
+        renderSecretCards();
+        alert(
+          `\uC138\uC158 \uAC00\uC838\uC624\uAE30 \uC644\uB8CC (\uC81C\uAC70 ${result.removed}, \uCD94\uAC00 ${result.added}, \uAC31\uC2E0 ${result.updated})`
+        );
+      } catch (e) {
+        alert("JSON \uD30C\uC2F1 \uC624\uB958: " + (e.message || e));
+      }
+      sessionImportInput.value = "";
+    });
     importInput.addEventListener("change", async () => {
       const file = importInput.files && importInput.files[0];
       if (!file) return;
@@ -3259,14 +3684,14 @@ textarea { min-height: 120px; resize: vertical; }
       }
       importInput.value = "";
     });
-    const secretList = el3("div", { className: "secret-list" });
+    const secretList = el4("div", { className: "secret-list" });
     panels.secrets.appendChild(secretList);
     function renderSecretCards() {
       secretList.innerHTML = "";
       const bound = getBoundSecrets();
       if (!bindResult.ok) {
         secretList.appendChild(
-          el3("p", {
+          el4("p", {
             className: "veil-sub",
             text: bindResult.userMessage || BINDING_GUIDE
           })
@@ -3275,7 +3700,7 @@ textarea { min-height: 120px; resize: vertical; }
       }
       if (!bound.length) {
         secretList.appendChild(
-          el3("p", {
+          el4("p", {
             className: "veil-sub",
             text: "\uC774 \uCC44\uD305\uC5D0 \uB4F1\uB85D\uB41C \uC2DC\uD06C\uB9BF\uC774 \uC5C6\uC2B5\uB2C8\uB2E4. \uC2A4\uCE94 \uD0ED\uC5D0\uC11C \uB85C\uC5B4\uBD81\uC744 \uC81C\uC548\xB7\uB4F1\uB85D\uD558\uC138\uC694."
           })
@@ -3284,27 +3709,27 @@ textarea { min-height: 120px; resize: vertical; }
       }
       for (const secret of bound) {
         const ns = nextStage(secret.revealStage);
-        const card = el3("div", { className: "card" });
+        const card = el4("div", { className: "card" });
         card.appendChild(
-          el3("h3", { text: maskTitle(secret) })
+          el4("h3", { text: maskTitle(secret) })
         );
-        const meta = el3("div", { className: "row" });
+        const meta = el4("div", { className: "row" });
         meta.appendChild(
-          el3("span", {
+          el4("span", {
             className: "badge",
             text: stageLabelKo(secret.revealStage)
           })
         );
         meta.appendChild(
-          el3("span", {
+          el4("span", {
             className: "badge",
             text: secret.chatSessionId ? `cid:${String(secret.chatSessionId).slice(0, 8)}\u2026` : secret.bindKey || `${secret.scopeType}:${secret.scopeId}`
           })
         );
         card.appendChild(meta);
-        const actions = el3("div", { className: "row" });
+        const actions = el4("div", { className: "row" });
         actions.appendChild(
-          el3("button", {
+          el4("button", {
             className: "btn btn-secondary",
             text: "\uC81C\uBAA9 \uC218\uC815",
             onclick: async () => {
@@ -3318,7 +3743,7 @@ textarea { min-height: 120px; resize: vertical; }
           })
         );
         actions.appendChild(
-          el3("button", {
+          el4("button", {
             className: "btn btn-secondary",
             text: "\uC0AD\uC81C",
             onclick: async () => {
@@ -3333,14 +3758,14 @@ textarea { min-height: 120px; resize: vertical; }
         const known = secret.knownBy?.length > 0 ? secret.knownBy.join(", ") : "(\uBBF8\uC9C0\uC815)";
         const unknown = secret.unknownBy?.length > 0 ? secret.unknownBy.join(", ") : "(\uC5C6\uC74C)";
         card.appendChild(
-          el3("p", {
+          el4("p", {
             className: "veil-sub",
             text: `\uC54E: ${known} \xB7 \uBAA8\uB984: ${unknown}`
           })
         );
         if (ns) {
           card.appendChild(
-            el3("button", {
+            el4("button", {
               className: "btn btn-primary",
               text: `\uB2E4\uC74C \uB2E8\uACC4 (${stageLabelKo(ns)})`,
               onclick: async () => {
@@ -3360,38 +3785,47 @@ textarea { min-height: 120px; resize: vertical; }
           );
         }
         const disclosures = getAllowedDisclosures(secret, {});
-        const details = el3("details", { className: "details" });
-        details.appendChild(el3("summary", { text: "\uD5C8\uC6A9 \uD45C\uD604 \uBCF4\uAE30" }));
+        const details = el4("details", { className: "details" });
+        details.appendChild(el4("summary", { text: "\uD5C8\uC6A9 \uD45C\uD604 \uBCF4\uAE30" }));
         if (disclosures.length === 0) {
-          details.appendChild(el3("p", { text: "(\uD604\uC7AC \uB2E8\uACC4\uC5D0\uC11C \uD5C8\uC6A9\uB418\uB294 \uC9C1\uC811 \uD45C\uD604 \uC5C6\uC74C)" }));
+          details.appendChild(el4("p", { text: "(\uD604\uC7AC \uB2E8\uACC4\uC5D0\uC11C \uD5C8\uC6A9\uB418\uB294 \uC9C1\uC811 \uD45C\uD604 \uC5C6\uC74C)" }));
         } else {
-          const ul = el3("ul");
+          const ul = el4("ul");
           for (const line of disclosures) {
-            ul.appendChild(el3("li", { text: line }));
+            ul.appendChild(el4("li", { text: line }));
           }
           details.appendChild(ul);
         }
         if (secret.hardBlocks && secret.hardBlocks.length) {
-          details.appendChild(el3("p", { text: `\uAE08\uC9C0 \uAD6C\uBB38: ${secret.hardBlocks.join(", ")}` }));
+          details.appendChild(el4("p", { text: `\uAE08\uC9C0 \uAD6C\uBB38: ${secret.hardBlocks.join(", ")}` }));
         }
         if (secret.revealStage === "revealed" && secret.fullSecret) {
-          details.appendChild(el3("p", { text: `\uC804\uCCB4 \uBE44\uBC00: ${secret.fullSecret}` }));
+          details.appendChild(el4("p", { text: `\uC804\uCCB4 \uBE44\uBC00: ${secret.fullSecret}` }));
         } else if (secret.fullSecret) {
-          details.appendChild(el3("p", { text: "\uC804\uCCB4 \uBE44\uBC00: \u2022\u2022\u2022\u2022 (\uC644\uC804 \uACF5\uAC1C \uD6C4 \uD45C\uC2DC)" }));
+          details.appendChild(el4("p", { text: "\uC804\uCCB4 \uBE44\uBC00: \u2022\u2022\u2022\u2022 (\uC644\uC804 \uACF5\uAC1C \uD6C4 \uD45C\uC2DC)" }));
         }
         card.appendChild(details);
+        attachSecretEditorToCard(card, doc, secret, {
+          onSave: async (updated) => {
+            const idx = secrets.findIndex((s) => s.id === secret.id);
+            if (idx < 0) return;
+            secrets[idx] = updated;
+            await store.save(secrets);
+            renderSecretCards();
+          }
+        });
         secretList.appendChild(card);
       }
     }
     renderSecretCards();
     const dbActors = await loadDbActors(Risuai);
-    const actorHint = el3("p", {
+    const actorHint = el4("p", {
       className: "veil-sub",
       text: dbActors.ok ? `DB\uC5D0\uC11C ${dbActors.actors.length}\uBA85\uC758 \uD654\uC790/\uD398\uB974\uC18C\uB098\uB97C \uBD88\uB7EC\uC654\uC2B5\uB2C8\uB2E4.` : dbActors.error || ""
     });
-    const draftField = el3("textarea", { placeholder: "\uAC80\uC0AC\uD560 \uCD08\uC548 \uD14D\uC2A4\uD2B8\uB97C \uC785\uB825\uD558\uC138\uC694." });
-    const speakerField = dbActors.ok ? el3("select", {}) : el3("input", { placeholder: "\uD654\uC790 ID (\uC120\uD0DD)" });
-    const personaField = dbActors.ok ? el3("select", {}) : el3("input", { placeholder: "\uD398\uB974\uC18C\uB098 ID (\uC120\uD0DD)" });
+    const draftField = el4("textarea", { placeholder: "\uAC80\uC0AC\uD560 \uCD08\uC548 \uD14D\uC2A4\uD2B8\uB97C \uC785\uB825\uD558\uC138\uC694." });
+    const speakerField = dbActors.ok ? el4("select", {}) : el4("input", { placeholder: "\uD654\uC790 ID (\uC120\uD0DD)" });
+    const personaField = dbActors.ok ? el4("select", {}) : el4("input", { placeholder: "\uD398\uB974\uC18C\uB098 ID (\uC120\uD0DD)" });
     if (dbActors.ok) {
       fillSelect(speakerField, dbActors.actors, "\uD654\uC790 \uC120\uD0DD");
       fillSelect(personaField, dbActors.actors.filter((a) => a.type === "persona"), "\uD398\uB974\uC18C\uB098 \uC120\uD0DD");
@@ -3402,15 +3836,15 @@ textarea { min-height: 120px; resize: vertical; }
         if (match) speakerField.value = match.id;
       }
     }
-    const listenersField = el3("input", {
+    const listenersField = el4("input", {
       placeholder: "\uCCAD\uC790 IDs (\uC27C\uD45C\uB85C \uAD6C\uBD84, \uC120\uD0DD)"
     });
-    const modeField = el3("select", {}, [
-      el3("option", { value: "ic", text: "IC" }),
-      el3("option", { value: "ooc", text: "OOC" }),
-      el3("option", { value: "narrator", text: "\uB0B4\uB808\uC774\uD130" }),
-      el3("option", { value: "system", text: "\uC2DC\uC2A4\uD15C" }),
-      el3("option", { value: "debug", text: "\uB514\uBC84\uADF8" })
+    const modeField = el4("select", {}, [
+      el4("option", { value: "ic", text: "IC" }),
+      el4("option", { value: "ooc", text: "OOC" }),
+      el4("option", { value: "narrator", text: "\uB0B4\uB808\uC774\uD130" }),
+      el4("option", { value: "system", text: "\uC2DC\uC2A4\uD15C" }),
+      el4("option", { value: "debug", text: "\uB514\uBC84\uADF8" })
     ]);
     const contextFields = {
       speaker: speakerField,
@@ -3418,21 +3852,21 @@ textarea { min-height: 120px; resize: vertical; }
       listeners: listenersField,
       mode: modeField
     };
-    const checkResult = el3("div", { className: "result" });
+    const checkResult = el4("div", { className: "result" });
     panels.check.appendChild(actorHint);
-    panels.check.appendChild(el3("div", { className: "field" }, [el3("label", { text: "\uCD08\uC548" }), draftField]));
+    panels.check.appendChild(el4("div", { className: "field" }, [el4("label", { text: "\uCD08\uC548" }), draftField]));
     panels.check.appendChild(
-      el3("div", { className: "field" }, [el3("label", { text: "\uD654\uC790" }), speakerField])
+      el4("div", { className: "field" }, [el4("label", { text: "\uD654\uC790" }), speakerField])
     );
     panels.check.appendChild(
-      el3("div", { className: "field" }, [el3("label", { text: "\uD398\uB974\uC18C\uB098" }), personaField])
+      el4("div", { className: "field" }, [el4("label", { text: "\uD398\uB974\uC18C\uB098" }), personaField])
     );
     panels.check.appendChild(
-      el3("div", { className: "field" }, [el3("label", { text: "\uCCAD\uC790" }), listenersField])
+      el4("div", { className: "field" }, [el4("label", { text: "\uCCAD\uC790" }), listenersField])
     );
-    panels.check.appendChild(el3("div", { className: "field" }, [el3("label", { text: "\uBAA8\uB4DC" }), modeField]));
+    panels.check.appendChild(el4("div", { className: "field" }, [el4("label", { text: "\uBAA8\uB4DC" }), modeField]));
     panels.check.appendChild(
-      el3("button", {
+      el4("button", {
         className: "btn btn-primary",
         text: "\uACF5\uAC1C \uAC80\uC0AC",
         onclick: () => {
@@ -3459,19 +3893,19 @@ textarea { min-height: 120px; resize: vertical; }
       })
     );
     panels.check.appendChild(checkResult);
-    const inputField = el3("textarea", { placeholder: "\uC720\uC800 \uC785\uB825 \uB610\uB294 \uC7A5\uBA74 \uD0A4\uC6CC\uB4DC" });
-    const guideResult = el3("div", { className: "result" });
+    const inputField = el4("textarea", { placeholder: "\uC720\uC800 \uC785\uB825 \uB610\uB294 \uC7A5\uBA74 \uD0A4\uC6CC\uB4DC" });
+    const guideResult = el4("div", { className: "result" });
     panels.guide.appendChild(
-      el3("div", { className: "field" }, [el3("label", { text: "\uC785\uB825" }), inputField])
+      el4("div", { className: "field" }, [el4("label", { text: "\uC785\uB825" }), inputField])
     );
     panels.guide.appendChild(
-      el3("p", {
+      el4("p", {
         className: "veil-sub",
         text: "\uAC80\uC0AC \uD0ED\uC758 \uD654\uC790\xB7\uD398\uB974\uC18C\uB098\xB7\uCCAD\uC790 \uC124\uC815\uC744 \uAC00\uC774\uB4DC\uC5D0\uB3C4 \uC0AC\uC6A9\uD569\uB2C8\uB2E4."
       })
     );
     panels.guide.appendChild(
-      el3("button", {
+      el4("button", {
         className: "btn btn-primary",
         text: "\uD78C\uD2B8 \uAC00\uC838\uC624\uAE30",
         onclick: () => {
@@ -3526,7 +3960,7 @@ textarea { min-height: 120px; resize: vertical; }
       });
     } else {
       panels.settings.appendChild(
-        el3("p", {
+        el4("p", {
           className: "veil-sub",
           text: "LLM \uC124\uC815 \uC800\uC7A5\uC18C\uB97C \uC0AC\uC6A9\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4."
         })

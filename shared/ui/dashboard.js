@@ -36,6 +36,7 @@ import {
   parseSessionImportPayload,
   mergeSessionImport,
 } from "../storage/session-secrets.js";
+import { attachSecretEditorToCard } from "./secret-editor.js";
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -623,6 +624,17 @@ export async function openDashboard(doc, ctx) {
         details.appendChild(el("p", { text: "전체 비밀: •••• (완전 공개 후 표시)" }));
       }
       card.appendChild(details);
+
+      attachSecretEditorToCard(card, doc, secret, {
+        onSave: async (updated) => {
+          const idx = secrets.findIndex((s) => s.id === secret.id);
+          if (idx < 0) return;
+          secrets[idx] = updated;
+          await store.save(secrets);
+          renderSecretCards();
+        },
+      });
+
       secretList.appendChild(card);
     }
   }

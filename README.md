@@ -36,7 +36,7 @@ Plugin repo: [https://github.com/Sallos725/VEIL](https://github.com/Sallos725/VE
 1. `npm run bundle`, then import `veil-lite.js` or `veil-full.js` in Plugin Settings.
 2. Select a **character and chat**, then open **VEIL** from the **hamburger menu** or **chat toolbar**.
 3. Tabs: 시크릿 · 검사 · 가이드 · 스캔 · **LLM 설정**.
-4. Secrets and scans apply only to the **current chat** (`charIndex:chatIndex`).
+4. Secrets are scoped per **chat session** (`cid:chaId:chat.id` when Risu assigns `chat.id`). Use the secrets tab to switch sessions, edit, export/import, or migrate legacy index keys.
 
 ### Lorebook scan
 
