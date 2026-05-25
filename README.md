@@ -25,6 +25,12 @@ npm run sidecar  # optional
 
 Edit [shared/](shared/) and edition `entry.js` files; **do not** hand-edit bundled `.js` except after bundle.
 
+### Releases
+
+Push a tag **`v*`** (e.g. `v0.0.1`) to run GitHub Actions: bundle, test, publish **`ghcr.io/sallos725/veil-sidecar:<tag>`**, and attach plugins + `docker-compose.release.yml` to a Release. See [docs/HANDOFF.md](docs/HANDOFF.md#github-releases-actions).
+
+Plugin repo: [https://github.com/Sallos725/VEIL](https://github.com/Sallos725/VEIL)
+
 ## RisuAI usage
 
 1. `npm run bundle`, then import `veil-lite.js` or `veil-full.js` in Plugin Settings.

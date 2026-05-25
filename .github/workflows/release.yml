@@ -1,0 +1,118 @@
+name: Release
+
+# v 로 시작하는 태그 (예: v0.0.1) 를 push 할 때만 실행
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: veil-sidecar
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync version from tag
+        run: node scripts/sync-version.mjs "${{ github.ref_name }}"
+
+      - name: Bundle plugins
+        run: npm run bundle
+
+      - name: Test
+        run: npm test
+
+      - name: Prepare release compose (image tag)
+        run: node scripts/prepare-release-compose.mjs "${{ github.ref_name }}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}},prefix=v
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+
+      - name: Build and push sidecar image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: full/sidecar/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify sidecar image health
+        run: |
+          IMG="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}"
+          IMG="${IMG,,}"
+          docker run -d --name veil-sidecar-smoke -p 16010:6010 "$IMG"
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:16010/health >/dev/null; then
+              echo "health OK"
+              docker rm -f veil-sidecar-smoke
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs veil-sidecar-smoke
+          docker rm -f veil-sidecar-smoke
+          exit 1
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            ## RisuAI plugins
+            - `veil-lite.js` — Lite (pluginStorage)
+            - `veil-full.js` — Full (optional sidecar)
+
+            ## VEIL sidecar (Docker)
+            ```bash
+            docker pull ghcr.io/${{ github.repository_owner }}/veil-sidecar:${{ github.ref_name }}
+            cd full
+            docker compose -f docker-compose.release.yml up -d
+            ```
+            Image tags: `${{ github.ref_name }}`, semver, and `latest` (this release).
+
+            Health: `http://127.0.0.1:6010/health` — set Risu plugin `sidecar_url` accordingly.
+          files: |
+            lite/veil-lite.js
+            full/plugin/veil-full.js
+            full/docker-compose.release.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

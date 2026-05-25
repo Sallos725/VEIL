@@ -1,13 +1,13 @@
 import { VEIL_BUTTON_ICON } from "./icons.js";
 import { openDashboard } from "./dashboard.js";
 
+/**
+ * @param {import("../risu-types.js").RisuaiPluginApi} Risuai
+ * @param {object} ctx
+ */
 export async function registerVeilUI(Risuai, ctx) {
-  if (!Risuai || !Risuai.registerButton) {
-    console.log("[VEIL] registerButton is not available.");
-    return { uiParts: [] };
-  }
-
   const uiParts = [];
+
   const open = async () => {
     try {
       await openDashboard(document, { Risuai, ...ctx });
@@ -36,21 +36,47 @@ export async function registerVeilUI(Risuai, ctx) {
     }
   };
 
-  const buttonConfig = {
-    name: "VEIL",
-    icon: VEIL_BUTTON_ICON,
-    iconType: "html",
-  };
+  const editionLabel =
+    ctx.edition === "full" ? "VEIL Full" : "VEIL Lite";
 
-  for (const location of ["hamburger", "chat"]) {
-    const part = await Risuai.registerButton(
-      { ...buttonConfig, location },
-      open
+  if (Risuai?.registerSetting) {
+    try {
+      const setting = await Risuai.registerSetting(
+        editionLabel,
+        open,
+        VEIL_BUTTON_ICON,
+        "html"
+      );
+      if (setting?.id) uiParts.push(setting.id);
+      console.log(`[VEIL] Settings menu registered: ${editionLabel}`);
+    } catch (error) {
+      console.log("[VEIL] registerSetting failed:", error);
+    }
+  } else {
+    console.log(
+      "[VEIL] registerSetting unavailable — use Plugin Settings list or hamburger/chat buttons."
     );
-    if (part?.id) uiParts.push(part.id);
   }
 
-  if (Risuai.registerPluginUnload) {
+  if (Risuai?.registerButton) {
+    const buttonConfig = {
+      name: "VEIL",
+      icon: VEIL_BUTTON_ICON,
+      iconType: "html",
+    };
+    for (const location of ["hamburger", "chat"]) {
+      const part = await Risuai.registerButton(
+        { ...buttonConfig, location },
+        open
+      );
+      if (part?.id) uiParts.push(part.id);
+    }
+    console.log("[VEIL] GUI buttons registered (hamburger + chat).");
+  } else {
+    console.log("[VEIL] registerButton is not available.");
+  }
+
+  if (Risuai?.registerPluginUnload) {
     Risuai.registerPluginUnload(async () => {
       for (const id of uiParts) {
         try {
@@ -62,6 +88,5 @@ export async function registerVeilUI(Risuai, ctx) {
     });
   }
 
-  console.log("[VEIL] GUI buttons registered (hamburger + chat).");
-  return { uiParts };
+  return { uiParts, settingsMenuRegistered: uiParts.length > 0 };
 }

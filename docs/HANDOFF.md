@@ -73,7 +73,9 @@ VEIL/
 
 - API `//@api 3.0`, `//@name veil_lite` / `veil_full`
 - `Risuai.registerMCP()` — [shared/mcp/handlers.js](../shared/mcp/handlers.js)
-- `Risuai.registerButton()` — **hamburger + chat** — [shared/ui/register.js](../shared/ui/register.js)
+- `Risuai.registerSetting()` — 플러그인 설정 좌측 **VEIL Lite / Full** — [shared/ui/register.js](../shared/ui/register.js)
+- `Risuai.registerButton()` — **hamburger + chat** — 동일 파일
+- `//@update-url` / `//@link` — [lite/banner.txt](../lite/banner.txt), [full/plugin/banner.txt](../full/plugin/banner.txt)
 
 ### 채팅 바인딩 (필수 UX)
 
@@ -184,6 +186,49 @@ chore: bundle ...
 ```
 
 `npm run bundle` 변경이 있으면 같은 PR/커밋에 `veil-lite.js` / `veil-full.js` 포함.
+
+---
+
+## GitHub Releases (Actions)
+
+**`v`로 시작하는 태그**를 push하면 [`.github/workflows/release.yml`](../.github/workflows/release.yml)만 실행됩니다 (예: `v0.0.1`). `main` push만으로는 릴리스되지 않습니다.
+
+```bash
+# 버전 올린 뒤 태그 생성·푸시
+git tag v0.0.1
+git push origin v0.0.1
+```
+
+워크플로 순서:
+
+1. 태그에서 버전 추출 → `scripts/sync-version.mjs`가 `package.json`, `lite/banner.txt`, `full/plugin/banner.txt` 동기화
+2. `npm run bundle` → `npm test`
+3. **GHCR**에 sidecar 이미지 push: `ghcr.io/sallos725/veil-sidecar:<tag>` (+ semver, `latest`)
+4. GitHub Release 첨부:
+   - `lite/veil-lite.js`, `full/plugin/veil-full.js`
+   - `full/docker-compose.release.yml` (위 이미지 고정, `docker compose up`용)
+
+Sidecar 배포 예:
+
+```bash
+docker pull ghcr.io/sallos725/veil-sidecar:v0.0.1
+cd full && docker compose -f docker-compose.release.yml up -d
+```
+
+로컬에서 이미지 빌드: 저장소 루트에서 `docker build -f full/sidecar/Dockerfile .`
+
+첫 GHCR push 후 [Packages](https://github.com/users/Sallos725/packages)에서 패키지 공개 범위(Public) 확인.
+
+RisuAI **초록 + 업데이트**는 `//@update-url` (raw `main` 브랜치) + `//@version` 비교. 저장소: [https://github.com/Sallos725/VEIL](https://github.com/Sallos725/VEIL).
+
+| 에디션 | update-url |
+|--------|------------|
+| Lite | `https://raw.githubusercontent.com/Sallos725/VEIL/main/lite/veil-lite.js` |
+| Full | `https://raw.githubusercontent.com/Sallos725/VEIL/main/full/plugin/veil-full.js` |
+
+`main`에 번들이 반영되어 있어야 Risu가 raw URL로 최신을 받을 수 있습니다. 태그 릴리스 후 `main`에 banner/번들 버전을 맞춰 merge·push하는 것을 권장합니다.
+
+일반 CI: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — `main` push / PR.
 
 ---
 

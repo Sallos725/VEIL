@@ -2,8 +2,10 @@
 //@version 0.0.1
 //@api 3.0
 //@display-name VEIL Lite
+//@update-url https://raw.githubusercontent.com/Sallos725/VEIL/main/lite/veil-lite.js
+//@link https://github.com/Sallos725/VEIL VEIL — GitHub
+//@link https://github.com/Sallos725/VEIL/blob/main/docs/HANDOFF.md 설치·사용 가이드
 //@arg sidecar_url string Optional VEIL sidecar URL (LLM·스캔은 GUI 「LLM 설정」 탭 권장)
-//@link https://github.com/kwaroran/Risuai/blob/main/plugins.md RisuAI Plugin Guide
 
 (() => {
   // shared/sample-secrets.js
@@ -3294,10 +3296,6 @@ textarea { min-height: 120px; resize: vertical; }
 
   // shared/ui/register.js
   async function registerVeilUI(Risuai, ctx) {
-    if (!Risuai || !Risuai.registerButton) {
-      console.log("[VEIL] registerButton is not available.");
-      return { uiParts: [] };
-    }
     const uiParts = [];
     const open = async () => {
       try {
@@ -3318,19 +3316,43 @@ textarea { min-height: 120px; resize: vertical; }
         }
       }
     };
-    const buttonConfig = {
-      name: "VEIL",
-      icon: VEIL_BUTTON_ICON,
-      iconType: "html"
-    };
-    for (const location of ["hamburger", "chat"]) {
-      const part = await Risuai.registerButton(
-        { ...buttonConfig, location },
-        open
+    const editionLabel = ctx.edition === "full" ? "VEIL Full" : "VEIL Lite";
+    if (Risuai?.registerSetting) {
+      try {
+        const setting = await Risuai.registerSetting(
+          editionLabel,
+          open,
+          VEIL_BUTTON_ICON,
+          "html"
+        );
+        if (setting?.id) uiParts.push(setting.id);
+        console.log(`[VEIL] Settings menu registered: ${editionLabel}`);
+      } catch (error) {
+        console.log("[VEIL] registerSetting failed:", error);
+      }
+    } else {
+      console.log(
+        "[VEIL] registerSetting unavailable \u2014 use Plugin Settings list or hamburger/chat buttons."
       );
-      if (part?.id) uiParts.push(part.id);
     }
-    if (Risuai.registerPluginUnload) {
+    if (Risuai?.registerButton) {
+      const buttonConfig = {
+        name: "VEIL",
+        icon: VEIL_BUTTON_ICON,
+        iconType: "html"
+      };
+      for (const location of ["hamburger", "chat"]) {
+        const part = await Risuai.registerButton(
+          { ...buttonConfig, location },
+          open
+        );
+        if (part?.id) uiParts.push(part.id);
+      }
+      console.log("[VEIL] GUI buttons registered (hamburger + chat).");
+    } else {
+      console.log("[VEIL] registerButton is not available.");
+    }
+    if (Risuai?.registerPluginUnload) {
       Risuai.registerPluginUnload(async () => {
         for (const id of uiParts) {
           try {
@@ -3340,8 +3362,7 @@ textarea { min-height: 120px; resize: vertical; }
         }
       });
     }
-    console.log("[VEIL] GUI buttons registered (hamburger + chat).");
-    return { uiParts };
+    return { uiParts, settingsMenuRegistered: uiParts.length > 0 };
   }
 
   // lite/entry.js

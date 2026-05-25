@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "bundle": "node scripts/bundle.mjs",
+    "version:sync": "node scripts/sync-version.mjs",
     "test": "node --test tests/**/*.test.js",
     "sidecar": "npm run start --prefix full/sidecar"
   },

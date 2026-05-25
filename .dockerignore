@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+**/node_modules
+lite/veil-lite.js
+full/plugin/veil-full.js
+tests
+docs
+*.md
+!full/sidecar/README.md

@@ -13,6 +13,21 @@ Health check: `http://127.0.0.1:6010/health`
 
 ## Run with Docker
 
+### Released image (GitHub tag `v*`)
+
+After a [GitHub Release](https://github.com/Sallos725/VEIL/releases), pull the sidecar from GHCR:
+
+```bash
+docker pull ghcr.io/sallos725/veil-sidecar:v0.0.1   # use your release tag
+cd full
+docker compose -f docker-compose.release.yml up -d
+docker compose -f docker-compose.release.yml down
+```
+
+`docker-compose.release.yml` is generated in CI from `docker-compose.release.yml.template` (image tag = release tag).
+
+### Build from source (dev)
+
 From repository root:
 
 ```bash
@@ -30,13 +45,15 @@ Stop:
 # or stop.bat
 ```
 
-Or use compose directly:
+Or use compose directly (local build):
 
 ```bash
 cd full
 docker compose up -d --build
 docker compose down
 ```
+
+Build context is the **repo root** (`docker build -f full/sidecar/Dockerfile .`).
 
 ## RisuAI Full plugin
 

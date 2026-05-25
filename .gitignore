@@ -22,6 +22,9 @@ coverage/
 # optional build scratch
 dist/
 
+# CI-generated release compose (see docker-compose.release.yml.template)
+full/docker-compose.release.yml
+
 # sidecar runtime data (user secrets)
 full/sidecar/data/*.json
 !full/sidecar/data/.gitkeep
