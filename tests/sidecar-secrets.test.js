@@ -33,6 +33,19 @@ describe("sidecar secrets API", () => {
     assert.ok(data.features.includes("secrets"));
   });
 
+  it("OPTIONS /health returns 204 with CORS headers", async () => {
+    const res = await fetch(`${baseUrl}/health`, {
+      method: "OPTIONS",
+      headers: { Origin: "https://risu.example", "Access-Control-Request-Method": "GET" },
+    });
+    assert.equal(res.status, 204);
+    assert.equal(res.headers.get("access-control-allow-origin"), "*");
+    assert.match(
+      res.headers.get("access-control-allow-methods") || "",
+      /GET/
+    );
+  });
+
   it("PUT and GET /secrets roundtrip", async () => {
     const secrets = cloneSampleSecrets();
     secrets[0].revealStage = "partial";

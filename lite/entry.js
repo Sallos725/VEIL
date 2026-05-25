@@ -1,4 +1,5 @@
 import { initVeilRuntime } from "../shared/storage/secretStore.js";
+import { configureVeilHttpForRisu } from "../shared/configure-risu-fetch.js";
 import { registerVeilUI } from "../shared/ui/register.js";
 import {
   resolvePluginOptions,
@@ -10,6 +11,7 @@ import { VEIL_VERSION } from "../shared/plugin-meta.js";
 (async () => {
   try {
     const Risuai = typeof globalThis.Risuai !== "undefined" ? globalThis.Risuai : undefined;
+    configureVeilHttpForRisu(Risuai);
     const { store, secrets } = await initVeilRuntime({
       edition: "lite",
       Risuai,

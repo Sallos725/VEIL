@@ -73,6 +73,7 @@ VEIL/
 
 - API `//@api 3.0`, `//@name veil_lite` / `veil_full`
 - **MCP 미사용** — `registerMCP` 호출 없음 ([shared/veil-service.js](../shared/veil-service.js)는 대시보드·sidecar용)
+- **Risu V3 CSP** — 플러그인 iframe은 `connect-src 'none'`; sidecar/HTTP는 [`Risuai.nativeFetch`](https://github.com/kwaroran/RisuAI/blob/main/plugins.md) 경유 ([shared/configure-risu-fetch.js](../shared/configure-risu-fetch.js))
 - `Risuai.registerSetting()` — 플러그인 설정 좌측 **VEIL Lite / Full** — [shared/ui/register.js](../shared/ui/register.js)
 - `Risuai.registerButton()` — **hamburger + chat** — 동일 파일
 - `//@update-url` / `//@link` — [lite/banner.txt](../lite/banner.txt), [full/plugin/banner.txt](../full/plugin/banner.txt)

@@ -1,4 +1,5 @@
 import { initVeilRuntime } from "../../shared/storage/secretStore.js";
+import { configureVeilHttpForRisu } from "../../shared/configure-risu-fetch.js";
 import { registerVeilUI } from "../../shared/ui/register.js";
 import { getSidecarUrl } from "../../shared/sidecar-client.js";
 import { resolvePluginOptions } from "../../shared/plugin-options.js";
@@ -11,6 +12,7 @@ const DEFAULT_SIDECAR_URL = "http://127.0.0.1:6010";
 (async () => {
   try {
     const Risuai = typeof globalThis.Risuai !== "undefined" ? globalThis.Risuai : undefined;
+    configureVeilHttpForRisu(Risuai);
     const llmStore = Risuai ? createLlmSettingsStore(Risuai) : null;
     const resolveSidecarUrl = Risuai
       ? await createDefaultSidecarResolver(

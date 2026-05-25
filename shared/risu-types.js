@@ -15,6 +15,7 @@
  * @property {() => Promise<void>} [hideContainer]
  * @property {(fn: Function) => void} [registerPluginUnload]
  * @property {(id: string) => Promise<void>} [unregisterUIPart]
+ * @property {(url: string, options?: RequestInit) => Promise<Response>} [nativeFetch]
  */
 
 export {};

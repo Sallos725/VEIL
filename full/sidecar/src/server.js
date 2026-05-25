@@ -17,6 +17,14 @@ import { scanLorebookEntries } from "./lorebook-scan.js";
 const PORT = Number(process.env.VEIL_PORT || 6010);
 const HOST = process.env.VEIL_HOST || "127.0.0.1";
 
+/** Risu nativeFetch / browser plugins send CORS preflight (OPTIONS). */
+const CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, POST, PUT, PATCH, OPTIONS",
+  "access-control-allow-headers": "content-type, authorization",
+  "access-control-max-age": "86400",
+};
+
 setDefaultSecretsLoader(() => cloneSampleSecrets());
 
 function readJsonBody(req) {
@@ -39,10 +47,15 @@ function readJsonBody(req) {
 function sendJson(res, status, payload, extraHeaders = {}) {
   res.writeHead(status, {
     "content-type": "application/json",
-    "access-control-allow-origin": "*",
+    ...CORS_HEADERS,
     ...extraHeaders,
   });
   res.end(JSON.stringify(payload));
+}
+
+function sendCorsPreflight(res) {
+  res.writeHead(204, CORS_HEADERS);
+  res.end();
 }
 
 function parsePath(url) {
@@ -228,6 +241,11 @@ export function createServer() {
   return http.createServer(async (req, res) => {
   try {
     const pathname = parsePath(req.url || "/");
+
+    if (req.method === "OPTIONS") {
+      sendCorsPreflight(res);
+      return;
+    }
 
     if (req.method === "GET" && pathname === "/health") {
       sendJson(res, 200, {

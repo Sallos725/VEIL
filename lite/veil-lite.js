@@ -129,8 +129,19 @@
   // shared/sidecar-client.js
   var DEFAULT_SIDECAR_URL = "http://127.0.0.1:6010";
   var SIDECAR_TIMEOUT_MS = 2e3;
+  var sidecarHttpFetch = typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null;
+  function setSidecarHttpFetch(impl) {
+    sidecarHttpFetch = impl;
+  }
   function getSidecarUrl(configUrl) {
     return configUrl || DEFAULT_SIDECAR_URL;
+  }
+  function cspHintFromError(error) {
+    const msg = String(error?.message || error || "");
+    if (msg.includes("Content Security Policy") || msg.includes("connect-src") || msg.includes("Refused to connect")) {
+      return " RisuAI \uD50C\uB7EC\uADF8\uC778 \uC0CC\uB4DC\uBC15\uC2A4 CSP \u2014 VEIL \uCD5C\uC2E0 \uBE4C\uB4DC(nativeFetch) \uD544\uC694.";
+    }
+    return "";
   }
   async function fetchSidecar(path, options = {}) {
     const baseUrl = getSidecarUrl(options.baseUrl);
@@ -139,24 +150,27 @@
     const timeoutMs = options.timeoutMs || SIDECAR_TIMEOUT_MS;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      if (typeof fetch === "undefined") {
+      if (!sidecarHttpFetch) {
         return { ok: false, error: "fetch is not available in this environment" };
       }
-      const response = await fetch(url, {
-        method: options.method || "GET",
-        headers: {
-          "content-type": "application/json",
-          ...options.headers || {}
-        },
+      const method = options.method || "GET";
+      const headers = { ...options.headers || {} };
+      if (options.body && !headers["content-type"] && !headers["Content-Type"]) {
+        headers["content-type"] = "application/json";
+      }
+      const response = await sidecarHttpFetch(url, {
+        method,
+        headers,
         body: options.body ? JSON.stringify(options.body) : void 0,
         signal: controller.signal
       });
       const data = await response.json();
       return { ok: response.ok, status: response.status, data };
     } catch (error) {
+      const base = error && error.message ? error.message : "sidecar unreachable";
       return {
         ok: false,
-        error: error && error.message ? error.message : "sidecar unreachable"
+        error: base + cspHintFromError(error)
       };
     } finally {
       clearTimeout(timeout);
@@ -371,6 +385,15 @@
         sidecarOnline: loaded.sidecarOnline
       }
     };
+  }
+
+  // shared/configure-risu-fetch.js
+  function configureVeilHttpForRisu(Risuai) {
+    if (Risuai && typeof Risuai.nativeFetch === "function") {
+      setSidecarHttpFetch((url, options) => Risuai.nativeFetch(url, options));
+      return true;
+    }
+    return false;
   }
 
   // shared/ui/icons.js
@@ -4256,6 +4279,7 @@ sidecar\uAC00 \uC2E4\uD589 \uC911\uC778\uC9C0, \uBC29\uD654\uBCBD\xB7\uD3EC\uD2B
   (async () => {
     try {
       const Risuai = typeof globalThis.Risuai !== "undefined" ? globalThis.Risuai : void 0;
+      configureVeilHttpForRisu(Risuai);
       const { store, secrets } = await initVeilRuntime({
         edition: "lite",
         Risuai

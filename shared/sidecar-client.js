@@ -1,8 +1,32 @@
 const DEFAULT_SIDECAR_URL = "http://127.0.0.1:6010";
 const SIDECAR_TIMEOUT_MS = 2000;
 
+/** @type {typeof fetch | null} */
+let sidecarHttpFetch =
+  typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : null;
+
+/**
+ * Override HTTP client (e.g. Risuai.nativeFetch) for sandboxed plugins.
+ * @param {typeof fetch} impl
+ */
+export function setSidecarHttpFetch(impl) {
+  sidecarHttpFetch = impl;
+}
+
 export function getSidecarUrl(configUrl) {
   return configUrl || DEFAULT_SIDECAR_URL;
+}
+
+function cspHintFromError(error) {
+  const msg = String(error?.message || error || "");
+  if (
+    msg.includes("Content Security Policy") ||
+    msg.includes("connect-src") ||
+    msg.includes("Refused to connect")
+  ) {
+    return " RisuAI 플러그인 샌드박스 CSP — VEIL 최신 빌드(nativeFetch) 필요.";
+  }
+  return "";
 }
 
 export async function fetchSidecar(path, options = {}) {
@@ -13,16 +37,19 @@ export async function fetchSidecar(path, options = {}) {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    if (typeof fetch === "undefined") {
+    if (!sidecarHttpFetch) {
       return { ok: false, error: "fetch is not available in this environment" };
     }
 
-    const response = await fetch(url, {
-      method: options.method || "GET",
-      headers: {
-        "content-type": "application/json",
-        ...(options.headers || {}),
-      },
+    const method = options.method || "GET";
+    const headers = { ...(options.headers || {}) };
+    if (options.body && !headers["content-type"] && !headers["Content-Type"]) {
+      headers["content-type"] = "application/json";
+    }
+
+    const response = await sidecarHttpFetch(url, {
+      method,
+      headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
     });
@@ -30,9 +57,11 @@ export async function fetchSidecar(path, options = {}) {
     const data = await response.json();
     return { ok: response.ok, status: response.status, data };
   } catch (error) {
+    const base =
+      error && error.message ? error.message : "sidecar unreachable";
     return {
       ok: false,
-      error: error && error.message ? error.message : "sidecar unreachable",
+      error: base + cspHintFromError(error),
     };
   } finally {
     clearTimeout(timeout);
