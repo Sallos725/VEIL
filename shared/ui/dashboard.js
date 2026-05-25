@@ -16,11 +16,13 @@ import {
   redactDraft,
 } from "../veil-service.js";
 import { getPromptSnippet } from "./prompt-snippet.js";
+import { isRisuLlmProvider } from "../llm/providers.js";
 import { VEIL_RELEASE_TAG } from "../plugin-meta.js";
 import { VEIL_STAGE_ORDER } from "../revealStages.js";
 import { loadDbActors, fillSelect, buildContextFromFields } from "./db-actors.js";
 import { mountScanPanel } from "./scan-panel.js";
 import { mountLlmSettingsPanel } from "./llm-settings-panel.js";
+import { mountRpLinkPanel } from "./rp-link-panel.js";
 import {
   resolveChatBindingSafe,
   bindingBannerText,
@@ -93,6 +95,8 @@ export async function openDashboard(doc, ctx) {
     pluginOptions: initialPluginOptions,
     llmStore,
     refreshOptions,
+    rpSettingsStore,
+    replacerStatus,
   } = ctx;
   let pluginOptions = initialPluginOptions || {};
   let activeTab = "secrets";
@@ -858,7 +862,20 @@ curl http://127.0.0.1:6010/health`,
     panels.check.appendChild(
       el("button", {
         className: "btn btn-primary",
-        text: edition === "full" ? "공개 검사 (sidecar)" : "공개 검사",
+        text: (() => {
+          if (
+            pluginOptions.llmConfigured &&
+            isRisuLlmProvider(pluginOptions.llmRaw?.providerId)
+          ) {
+            return "공개 검사 (Risu LLM)";
+          }
+          if (pluginOptions.llmConfigured) {
+            return edition === "full"
+              ? "공개 검사 (LLM → sidecar)"
+              : "공개 검사 (LLM 보조)";
+          }
+          return edition === "full" ? "공개 검사 (sidecar)" : "공개 검사";
+        })(),
         onclick: async () => {
           const ctxCheck = buildContextFromFields(contextFields, binding);
           ctxCheck.draft_text = draftField.value;
@@ -866,20 +883,23 @@ curl http://127.0.0.1:6010/health`,
           checkResult.className = "result";
           let result;
           try {
+            const llmRaw = pluginOptions.llmRaw;
             if (edition === "full" && resolveSidecarUrl) {
               const url = await resolveSidecarUrl(ctxCheck);
               result = await checkDisclosureFull(
                 Risuai,
                 secrets,
                 ctxCheck,
-                url
+                url,
+                llmRaw
               );
             } else {
               result = await checkDisclosureLite(
                 Risuai,
                 secrets,
                 ctxCheck,
-                resolveSidecarUrl
+                resolveSidecarUrl,
+                llmRaw
               );
             }
           } catch (e) {
@@ -890,6 +910,8 @@ curl http://127.0.0.1:6010/health`,
           const lines = [
             `결과: ${result.safe ? "안전" : "위험"} (${riskLabelKo(result.risk_level)})`,
           ];
+          if (result.risu_assisted) lines.push("(Risu 메인/보조 LLM 보조)");
+          if (result.plugin_llm_assisted) lines.push("(외부 LLM semantic 보조)");
           if (result.sidecar_assisted) lines.push("(sidecar semantic 보조)");
           if (result.violations?.length) {
             lines.push("", "위반 목록:");
@@ -966,7 +988,7 @@ curl http://127.0.0.1:6010/health`,
     panels.redact.appendChild(
       el("p", {
         className: "veil-sub",
-        text: "허용 단계에 맞게 초안을 줄이거나 바꿉니다 (sidecar /rewrite 보조).",
+        text: "허용 단계에 맞게 초안을 줄이거나 바꿉니다 (Risu/외부 LLM 또는 sidecar /rewrite).",
       })
     );
     panels.redact.appendChild(
@@ -993,7 +1015,7 @@ curl http://127.0.0.1:6010/health`,
               secrets,
               ctxRedact,
               url,
-              { useSidecar: true }
+              { useSidecar: true, llmRaw: pluginOptions.llmRaw }
             );
             const lines = [
               result.redacted_text || "(텍스트 없음)",
@@ -1001,6 +1023,8 @@ curl http://127.0.0.1:6010/health`,
               result.explanation || "",
               `잔여 위험: ${riskLabelKo(result.remaining_risk || "none")}`,
             ];
+            if (result.risu_assisted) lines.unshift("(Risu LLM rewrite 적용)");
+            if (result.plugin_llm_assisted) lines.unshift("(외부 LLM rewrite 적용)");
             if (result.sidecar_assisted) lines.unshift("(sidecar rewrite 적용)");
             redactResult.textContent = lines.join("\n");
             redactResult.className = "result safe";
@@ -1024,6 +1048,14 @@ curl http://127.0.0.1:6010/health`,
             : "VEIL Lite에는 수정 탭이 없습니다. Full + sidecar를 사용하세요.",
       })
     );
+  }
+
+  if (rpSettingsStore && panels.help) {
+    mountRpLinkPanel(panels.help, {
+      Risuai,
+      rpSettingsStore,
+      replacerStatus,
+    });
   }
 
   const snippetArea = el("textarea", {

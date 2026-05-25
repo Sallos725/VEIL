@@ -152,7 +152,7 @@ Lite architecture:
 RisuAI -> VEIL Lite Plugin -> pluginStorage + dashboard GUI
 ```
 
-RisuAI exposes model-callable MCP primarily through **Risu modules** (`internal:risuai`), not plugin `registerMCP`. VEIL logic for RP is invoked via the **dashboard**, implemented in [`shared/veil-service.js`](shared/veil-service.js) (formerly MCP handlers).
+RisuAI exposes model-callable MCP primarily through **Risu modules** (`internal:risuai`), not plugin `registerMCP`. VEIL RP enforcement uses **`addRisuReplacer`** ([`shared/risu-replacers.js`](shared/risu-replacers.js)): matched-secret guidance before requests, heuristic redact after responses. The **dashboard** ([`shared/veil-service.js`](shared/veil-service.js)) remains for manual guide/check/redact.
 
 Full **requires** sidecar online for writes; offline shows read-only cache + setup instructions. Lite does not require sidecar.
 
@@ -879,6 +879,7 @@ Lite does not require sidecar. Full requires sidecar for beta.
 2. Dashboard provides guidance, disclosure check, secret management.
 3. No sidecar, no MCP registration.
 4. pluginStorage persists secrets per chat session (cid bindKey).
+5. replacer permission: beforeRequest injects matched-secret stage guidance; afterRequest redacts unsafe output.
 ```
 
 ---
@@ -891,6 +892,7 @@ Lite does not require sidecar. Full requires sidecar for beta.
 3. Secrets SoT on sidecar; semantic check + rewrite via sidecar.
 4. Dashboard redact tab + scan via sidecar.
 5. Core hardBlocks / reveal-stage rules still in plugin shared/core.js.
+6. Same replacer RP link as Lite (heuristic redact; sidecar semantic not in afterRequest by default).
 ```
 
 ---

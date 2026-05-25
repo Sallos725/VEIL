@@ -11,6 +11,12 @@ import {
   requestRewrite,
 } from "./sidecar-client.js";
 import {
+  getBrowserLlmConfig,
+  isBrowserLlmConfigured,
+  pluginSemanticAssist,
+  pluginRewriteAssist,
+} from "./llm/browser-client.js";
+import {
   resolveScopedSecrets,
   secretMatchesBinding,
   BINDING_GUIDE,
@@ -18,9 +24,9 @@ import {
 
 export { resolveScopedSecrets as resolveScope } from "./chat-binding.js";
 
-function mergeDisclosureResults(liteResult, sidecarData) {
-  if (!sidecarData || !sidecarData.violations) return liteResult;
-  const merged = [...liteResult.violations, ...sidecarData.violations];
+function mergeDisclosureResults(liteResult, assistData, assistedFlag) {
+  if (!assistData || !assistData.violations) return liteResult;
+  const merged = [...liteResult.violations, ...assistData.violations];
   const seen = new Set();
   const violations = merged.filter((v) => {
     const key = `${v.secret_id}:${v.reason}`;
@@ -32,8 +38,19 @@ function mergeDisclosureResults(liteResult, sidecarData) {
     safe: violations.length === 0,
     risk_level: violations.length === 0 ? "none" : liteResult.risk_level,
     violations,
-    sidecar_assisted: true,
+    [assistedFlag]: true,
   };
+}
+
+async function tryPluginSemantic(Risuai, draft, liteResult, llmRaw) {
+  if (!llmRaw || !Risuai) return null;
+  const config = getBrowserLlmConfig(llmRaw);
+  if (!isBrowserLlmConfigured(config, Risuai)) return null;
+  const assist = await pluginSemanticAssist(Risuai, draft, liteResult, config);
+  if (assist.ok && assist.data) {
+    return { data: assist.data, via: assist.via || "plugin" };
+  }
+  return null;
 }
 
 export function bindingMeta(binding, bindKey, bindResult) {
@@ -75,30 +92,45 @@ export async function checkDisclosureLite(
   Risuai,
   secrets,
   ctx,
-  resolveSidecarUrl
+  resolveSidecarUrl,
+  llmRaw
 ) {
   const { scoped, context, bindKey, binding, bindResult } =
     await resolveScopedSecrets(Risuai, secrets, ctx);
   const meta = bindingMeta(binding, bindKey, bindResult);
   const liteResult = checkDisclosure(ctx.draft_text || "", context, scoped);
+  const draft = ctx.draft_text || "";
+
+  const pluginAssist = await tryPluginSemantic(Risuai, draft, liteResult, llmRaw);
+  if (pluginAssist) {
+    const flag =
+      pluginAssist.via === "risu" ? "risu_assisted" : "plugin_llm_assisted";
+    return {
+      ...mergeDisclosureResults(liteResult, pluginAssist.data, flag),
+      ...meta,
+    };
+  }
 
   if (resolveSidecarUrl) {
     const sidecarUrl = await resolveSidecarUrl(context);
     if (sidecarUrl) {
       const sidecar = await requestSemanticCheck(
         {
-          draft_text: ctx.draft_text || "",
+          draft_text: draft,
           context,
           lite_result: liteResult,
         },
         sidecarUrl
       );
       if (sidecar.ok && sidecar.data) {
-        return { ...mergeDisclosureResults(liteResult, sidecar.data), ...meta };
+        return {
+          ...mergeDisclosureResults(liteResult, sidecar.data, "sidecar_assisted"),
+          ...meta,
+        };
       }
     }
   }
-  return { ...liteResult, sidecar_assisted: false, ...meta };
+  return { ...liteResult, sidecar_assisted: false, plugin_llm_assisted: false, risu_assisted: false, ...meta };
 }
 
 /**
@@ -108,25 +140,42 @@ export async function checkDisclosureFull(
   Risuai,
   secrets,
   ctx,
-  sidecarUrl
+  sidecarUrl,
+  llmRaw
 ) {
   const { scoped, context, bindKey, binding, bindResult } =
     await resolveScopedSecrets(Risuai, secrets, ctx);
   const meta = bindingMeta(binding, bindKey, bindResult);
   const liteResult = checkDisclosure(ctx.draft_text || "", context, scoped);
+  const draft = ctx.draft_text || "";
 
-  const sidecar = await requestSemanticCheck(
-    {
-      draft_text: ctx.draft_text || "",
-      context,
-      lite_result: liteResult,
-    },
-    sidecarUrl
-  );
-  if (sidecar.ok && sidecar.data) {
-    return { ...mergeDisclosureResults(liteResult, sidecar.data), ...meta };
+  const pluginAssist = await tryPluginSemantic(Risuai, draft, liteResult, llmRaw);
+  if (pluginAssist) {
+    const flag =
+      pluginAssist.via === "risu" ? "risu_assisted" : "plugin_llm_assisted";
+    return {
+      ...mergeDisclosureResults(liteResult, pluginAssist.data, flag),
+      ...meta,
+    };
   }
-  return { ...liteResult, sidecar_assisted: false, ...meta };
+
+  if (sidecarUrl) {
+    const sidecar = await requestSemanticCheck(
+      {
+        draft_text: draft,
+        context,
+        lite_result: liteResult,
+      },
+      sidecarUrl
+    );
+    if (sidecar.ok && sidecar.data) {
+      return {
+        ...mergeDisclosureResults(liteResult, sidecar.data, "sidecar_assisted"),
+        ...meta,
+      };
+    }
+  }
+  return { ...liteResult, sidecar_assisted: false, plugin_llm_assisted: false, risu_assisted: false, ...meta };
 }
 
 /**
@@ -137,25 +186,56 @@ export async function redactDraft(
   secrets,
   ctx,
   sidecarUrl,
-  { useSidecar = true } = {}
+  { useSidecar = true, llmRaw } = {}
 ) {
   const { scoped, context, bindKey, binding, bindResult } =
     await resolveScopedSecrets(Risuai, secrets, ctx);
   const meta = bindingMeta(binding, bindKey, bindResult);
-  const liteRedaction = redactToAllowedStage(
-    ctx.draft_text || "",
-    ctx.target_stage || "hint",
-    scoped
-  );
+  const draft = ctx.draft_text || "";
+  const targetStage = ctx.target_stage || "hint";
+  const liteRedaction = redactToAllowedStage(draft, targetStage, scoped);
+
+  const llmConfig = llmRaw ? getBrowserLlmConfig(llmRaw) : null;
+  if (llmConfig && isBrowserLlmConfigured(llmConfig, Risuai)) {
+    const pluginRewrite = await pluginRewriteAssist(
+      Risuai,
+      draft,
+      targetStage,
+      liteRedaction,
+      llmConfig
+    );
+    if (pluginRewrite.ok && pluginRewrite.data) {
+      const flag =
+        pluginRewrite.via === "risu" ? "risu_assisted" : "plugin_llm_assisted";
+      return {
+        ...liteRedaction,
+        redacted_text: pluginRewrite.data.redacted_text,
+        explanation:
+          pluginRewrite.data.explanation || liteRedaction.explanation,
+        remaining_risk:
+          pluginRewrite.data.remaining_risk || liteRedaction.remaining_risk,
+        sidecar_assisted: false,
+        plugin_llm_assisted: flag === "plugin_llm_assisted",
+        risu_assisted: flag === "risu_assisted",
+        ...meta,
+      };
+    }
+  }
 
   if (!useSidecar || !sidecarUrl) {
-    return { ...liteRedaction, sidecar_assisted: false, ...meta };
+    return {
+      ...liteRedaction,
+      sidecar_assisted: false,
+      plugin_llm_assisted: false,
+      risu_assisted: false,
+      ...meta,
+    };
   }
 
   const sidecar = await requestRewrite(
     {
-      draft_text: ctx.draft_text || "",
-      target_stage: ctx.target_stage || "hint",
+      draft_text: draft,
+      target_stage: targetStage,
       lite_result: liteRedaction,
     },
     sidecarUrl
@@ -168,10 +248,18 @@ export async function redactDraft(
       remaining_risk:
         sidecar.data.remaining_risk || liteRedaction.remaining_risk,
       sidecar_assisted: true,
+      plugin_llm_assisted: false,
+      risu_assisted: false,
       ...meta,
     };
   }
-  return { ...liteRedaction, sidecar_assisted: false, ...meta };
+  return {
+    ...liteRedaction,
+    sidecar_assisted: false,
+    plugin_llm_assisted: false,
+    risu_assisted: false,
+    ...meta,
+  };
 }
 
 export async function advanceStage(Risuai, secrets, store, ctx) {

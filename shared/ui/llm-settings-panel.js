@@ -6,6 +6,7 @@ import {
   parseVertexProjectId,
   resolveBaseUrlForSettings,
   isLlmSettingsConfigured,
+  isRisuLlmProvider,
 } from "../llm/providers.js";
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -59,14 +60,24 @@ function applyProviderDefaults(state, providerId) {
 }
 
 function updateAuthVisibility(state) {
-  const provider = getProvider(state.providerSelect.value);
+  const providerId = state.providerSelect.value;
+  const provider = getProvider(providerId);
+  const isRisu = isRisuLlmProvider(providerId);
   const isVertex = provider.authType === "vertexJson";
-  state.apiKeyBlock.style.display = isVertex ? "none" : "block";
+  const showHttpFields = !isRisu;
+
+  state.baseUrlField.style.display = showHttpFields ? "block" : "none";
+  state.modelField.style.display = showHttpFields ? "block" : "none";
+  state.apiKeyBlock.style.display = isRisu || isVertex ? "none" : "block";
   state.vertexBlock.style.display = isVertex ? "block" : "none";
+  state.risuHintBlock.style.display = isRisu ? "block" : "none";
   state.apiKeyLabel.textContent = isVertex ? "" : provider.hint || "API 키";
+  if (isRisu && state.risuHintText) {
+    state.risuHintText.textContent = provider.hint || "";
+  }
 }
 
-function updateStatus(state, settings, pluginOptions) {
+function updateStatus(state, settings, pluginOptions, Risuai) {
   const raw = {
     providerId: settings.providerId,
     baseUrl: resolveBaseUrlForSettings(settings),
@@ -74,11 +85,21 @@ function updateStatus(state, settings, pluginOptions) {
     apiKey: settings.apiKey,
     vertexJson: settings.vertexJson,
   };
-  const ok = isLlmSettingsConfigured(raw);
-  state.statusChip.className = `chip ${ok ? "ok" : "off"}`;
-  state.statusChip.textContent = ok
-    ? `LLM 준비됨 · ${getProvider(settings.providerId).label}`
-    : "LLM 미설정";
+  const risuApi = Boolean(
+    Risuai?.runLLMModel || pluginOptions?.risuLlmAvailable
+  );
+  const ok = isLlmSettingsConfigured(
+    raw,
+    risuApi ? { runLLMModel: Risuai?.runLLMModel || (() => {}) } : undefined
+  );
+  const needsRisuApi =
+    isRisuLlmProvider(settings.providerId) && !risuApi;
+  state.statusChip.className = `chip ${ok && !needsRisuApi ? "ok" : "off"}`;
+  state.statusChip.textContent = needsRisuApi
+    ? "Risu runLLMModel API 없음 — RisuAI 최신 버전 필요"
+    : ok
+      ? `LLM 준비됨 · ${getProvider(settings.providerId).label}`
+      : "LLM 미설정";
   if (settings.vertexJsonImported && settings.vertexJson) {
     state.vertexImportChip.className = "chip ok";
     state.vertexImportChip.textContent =
@@ -96,7 +117,7 @@ function updateStatus(state, settings, pluginOptions) {
  * @param {{ Risuai: object, llmStore: object, edition: string, pluginOptions: object, onSaved: (opts: object) => void }} ctx
  */
 export function mountLlmSettingsPanel(panel, ctx) {
-  const { llmStore, edition, onSaved } = ctx;
+  const { Risuai, llmStore, edition, onSaved } = ctx;
   let current = llmStore.get();
 
   panel.appendChild(
@@ -128,6 +149,10 @@ export function mountLlmSettingsPanel(panel, ctx) {
     vertexImportChip: el("span", { className: "chip off", text: "" }),
     vertexFileInput: el("input", { type: "file", accept: "application/json,.json" }),
     statusChip: el("span", { className: "chip off", text: "" }),
+    baseUrlField: el("div", { className: "field" }),
+    modelField: el("div", { className: "field" }),
+    risuHintBlock: el("div", { className: "field veil-risu-hint" }),
+    risuHintText: el("p", { className: "veil-sub", text: "" }),
     sidecarInput:
       edition === "full"
         ? el("input", { placeholder: "http://127.0.0.1:6010" })
@@ -167,23 +192,28 @@ export function mountLlmSettingsPanel(panel, ctx) {
     ])
   );
 
-  panel.appendChild(
-    el("div", { className: "field" }, [
-      el("label", { text: "API Base URL (OpenAI 호환)" }),
-      state.baseUrlInput,
-      el("p", {
-        className: "veil-sub",
-        text: "Vertex는 프로젝트·리전에 맞게 자동 채워집니다. Custom은 직접 입력.",
-      }),
-    ])
+  state.baseUrlField.appendChild(el("label", { text: "API Base URL (OpenAI 호환)" }));
+  state.baseUrlField.appendChild(state.baseUrlInput);
+  state.baseUrlField.appendChild(
+    el("p", {
+      className: "veil-sub",
+      text: "Vertex는 프로젝트·리전에 맞게 자동 채워집니다. Custom은 직접 입력.",
+    })
   );
+  panel.appendChild(state.baseUrlField);
 
-  panel.appendChild(
-    el("div", { className: "field" }, [
-      el("label", { text: "모델 ID" }),
-      state.modelInput,
-    ])
+  state.modelField.appendChild(el("label", { text: "모델 ID" }));
+  state.modelField.appendChild(state.modelInput);
+  panel.appendChild(state.modelField);
+
+  state.risuHintBlock.appendChild(
+    el("p", {
+      className: "veil-sub",
+      text: "RisuAI에 설정된 메인/보조 모델을 그대로 사용합니다. URL·API 키·모델 ID 입력은 필요 없습니다.",
+    })
   );
+  state.risuHintBlock.appendChild(state.risuHintText);
+  panel.appendChild(state.risuHintBlock);
 
   state.apiKeyBlock.appendChild(state.apiKeyLabel);
   state.apiKeyBlock.appendChild(state.apiKeyInput);
@@ -274,7 +304,7 @@ export function mountLlmSettingsPanel(panel, ctx) {
         );
       }
       state.vertexJsonArea.classList.add("veil-input-ok");
-      updateStatus(state, readForm(state), ctx.pluginOptions);
+      updateStatus(state, readForm(state), ctx.pluginOptions, Risuai);
     } catch {
       alert("유효한 JSON 파일이 아닙니다.");
     }
@@ -299,7 +329,7 @@ export function mountLlmSettingsPanel(panel, ctx) {
           }
           const saved = await llmStore.save(form);
           current = saved;
-          updateStatus(state, saved, ctx.pluginOptions);
+          updateStatus(state, saved, ctx.pluginOptions, Risuai);
           if (onSaved) {
             await onSaved(await ctx.refreshOptions?.());
           }
@@ -317,5 +347,5 @@ export function mountLlmSettingsPanel(panel, ctx) {
   );
 
   updateAuthVisibility(state);
-  updateStatus(state, current, ctx.pluginOptions);
+  updateStatus(state, current, ctx.pluginOptions, Risuai);
 }

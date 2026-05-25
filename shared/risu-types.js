@@ -15,7 +15,11 @@
  * @property {() => Promise<void>} [hideContainer]
  * @property {(fn: Function) => void} [registerPluginUnload]
  * @property {(id: string) => Promise<void>} [unregisterUIPart]
+ * @property {(permission: string) => Promise<boolean>} [requestPluginPermission]
+ * @property {(phase: string, fn: Function) => Promise<void>} [addRisuReplacer]
+ * @property {(phase: string, fn: Function) => void} [removeRisuReplacer]
  * @property {(url: string, options?: RequestInit) => Promise<Response>} [nativeFetch]
+ * @property {(opts: { mode: string; messages: Array<{ role: string; content: string }>; allowPlugins?: boolean }) => Promise<string|{ type?: string; result?: string; content?: string }>} [runLLMModel]
  */
 
 export {};

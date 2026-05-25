@@ -34,7 +34,7 @@ Edit [shared/](shared/) and `lite/entry.js` / `full/plugin/entry.js`; run `npm r
 
 1. Import `veil-lite.js` from Plugin Settings (see [RELEASE](docs/RELEASE-v0.1.0-beta.md)).
 2. Select character + chat, open **VEIL** (settings sidebar / hamburger / chat toolbar).
-3. Tabs: 시크릿 · 검사 · 가이드 · 스캔 · LLM 설정 · **안내** (prompt snippet).
+3. Tabs: 시크릿 · 검사 · 가이드 · 스캔 · LLM 설정 · **안내** (RP replacer 토글 + snippet). Risu **replacer** 권한 허용 시 채팅마다 가이드 주입·자동 redact.
 
 ## RisuAI — Full
 

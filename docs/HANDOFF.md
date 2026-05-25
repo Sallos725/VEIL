@@ -16,7 +16,7 @@
 | GUI | 햄버거 **+** 채팅 도구 모음 → VEIL |
 | 시크릿 범위 | **봇·채팅 세션** — Risu `chat.id` 있으면 `cid:chaId:chatId`, 없으면 `charIndex:chatIndex` |
 | 로어북 | Risu `globalLore` / `localLore` — **항목 1개 = 시크릿 1개** |
-| LLM | GUI **「LLM 설정」** 탭 (pluginStorage), OpenAI 호환 API |
+| LLM | GUI **「LLM 설정」** 탭 — Risu 메인/보조(`runLLMModel`) 또는 OpenAI 호환 HTTP |
 
 ---
 
@@ -48,11 +48,12 @@ VEIL/
 │  ├─ chat-binding.js     # Risu 채팅 바인딩 (getDatabase 검증)
 │  ├─ plugin-options.js   # GUI LLM 설정 + sidecar URL 병합
 │  ├─ veil-service.js     # GUI용 API (구 MCP handlers)
+│  ├─ risu-replacers.js   # RP beforeRequest 주입 + afterRequest redact
 │  ├─ mcp/README.md       # MCP deprecated
-│  ├─ storage/            # pluginStore, sidecarStore, llmSettingsStore
+│  ├─ storage/            # pluginStore, sidecarStore, llm/rp settings
 │  ├─ lorebook/           # 수집·스캔·직접등록
-│  ├─ llm/                # providers, browser-client, google-auth(Vertex)
-│  └─ ui/                 # dashboard, scan-panel, llm-settings, register
+│  ├─ llm/                # providers, risu-model-client, browser-client, google-auth(Vertex)
+│  └─ ui/                 # dashboard, scan-panel, llm-settings, rp-link-panel, register
 ├─ lite/
 │  ├─ entry.js            # 번들 입력
 │  ├─ banner.txt          # Risu 메타 (sidecar_url만 선택)
@@ -77,6 +78,20 @@ VEIL/
 - `Risuai.registerSetting()` — 플러그인 설정 좌측 **VEIL Lite / Full** — [shared/ui/register.js](../shared/ui/register.js)
 - `Risuai.registerButton()` — **hamburger + chat** — 동일 파일
 - `//@update-url` / `//@link` — [lite/banner.txt](../lite/banner.txt), [full/plugin/banner.txt](../full/plugin/banner.txt)
+
+### RP 자동 연동 (replacer)
+
+플러그인 로드 시 [`shared/risu-replacers.js`](../shared/risu-replacers.js)가 `requestPluginPermission('replacer')` 후 등록:
+
+| 단계 | API | 동작 |
+|------|-----|------|
+| 요청 전 | `addRisuReplacer('beforeRequest')` | 마지막 유저 메시지와 **태그·제목 매칭**된 시크릿만 `[VEIL]` system 블록 주입 (`allowed_disclosures`만, fullSecret 금지) |
+| 응답 후 | `addRisuReplacer('afterRequest')` | `checkDisclosure` → unsafe 시 `redactToAllowedStage`로 **자동 완화** (동기 휴리스틱, LLM 없음) |
+
+- 설정: `veil_rp_settings` in pluginStorage — [shared/storage/rp-settings-store.js](../shared/storage/rp-settings-store.js)
+- GUI: 대시보드 **「안내」** 탭 — [shared/ui/rp-link-panel.js](../shared/ui/rp-link-panel.js) (토글·replacer 권한 요청)
+- 바인딩 실패·매칭 0건·`enabled: false` → replacer no-op
+- **스트리밍** 응답은 Risu 구현에 따라 `afterRequest` 타이밍이 다를 수 있음 — 수동 QA 권장
 
 ### 채팅 바인딩 (필수 UX)
 
@@ -104,9 +119,11 @@ VEIL/
 
 - 탭: 대시보드 **「LLM 설정」** — [shared/ui/llm-settings-panel.js](../shared/ui/llm-settings-panel.js)
 - 저장 키: `veil_llm_settings` in pluginStorage — [shared/storage/llmSettingsStore.js](../shared/storage/llmSettingsStore.js)
-- 프로바이더: OpenAI, Anthropic, Vertex, Google AI Studio, Ollama Cloud, Custom
-- Vertex: 서비스 계정 JSON 파일/붙여넣기 → OAuth 토큰 → OpenAI 호환 Vertex endpoint
-- 호출: [shared/llm/browser-client.js](../shared/llm/browser-client.js) `POST {baseUrl}/chat/completions`
+- 프로바이더: **RisuAI 메인** (`mode: model`), **RisuAI 보조** (`mode: otherAx`), OpenAI, Anthropic, Vertex, Google AI Studio, Ollama Cloud, Custom
+- Risu: URL·API 키·모델 ID 불필요 — [shared/llm/risu-model-client.js](../shared/llm/risu-model-client.js) `Risuai.runLLMModel({ allowPlugins: true })`
+- HTTP: [shared/llm/browser-client.js](../shared/llm/browser-client.js) — sidecar/외부 API는 `nativeFetch` (CSP)
+- Vertex: 서비스 계정 JSON → OAuth → OpenAI 호환 Vertex endpoint
+- 로어 스캔·공개 검사·수정: Risu/HTTP LLM **플러그인 우선** → Full은 sidecar 폴백 ([shared/lorebook/run-scan.js](../shared/lorebook/run-scan.js), [shared/veil-service.js](../shared/veil-service.js))
 
 ---
 
@@ -120,9 +137,9 @@ VEIL/
 | 가이드 | reveal guidance | 동일 |
 | 스캔 | 플러그인 LLM·휴리스틱 | sidecar 스캔 |
 | LLM 설정 | pluginStorage | pluginStorage |
-| 안내 | 프롬프트 스니펫 복사 | 동일 |
+| 안내 | RP 연동 토글 + 스니펫 | 동일 |
 
-캐릭터 카드 스니펫: [shared/ui/prompt-snippet.js](../shared/ui/prompt-snippet.js) — **「VEIL 도구 호출」이 아니라 대시보드 사용**을 안내.
+캐릭터 카드 스니펫: [shared/ui/prompt-snippet.js](../shared/ui/prompt-snippet.js) — replacer 자동 연동 + 대시보드 가이드/검사 안내.
 
 ---
 
@@ -145,6 +162,7 @@ VEIL/
 - [x] 로어북 1:1 수집·직접 등록
 - [x] GUI LLM 프로바이더 설정
 - [x] sidecar lorebook scan + semantic check (선택)
+- [x] **RP replacer** — beforeRequest 가이드 주입 + afterRequest redact
 - [x] `npm test` green
 
 ---
@@ -155,7 +173,9 @@ VEIL/
 - 그룹 채팅(character.type === 'group') 미지원
 - 앱 전역 db.loreBook 페이지 미스캔 (캐릭터 globalLore만)
 - Vertex 토큰: 브라우저에서 JWT 교환 (서비스 계정 JSON)
-- Risu 모듈 경유 모델 도구 연동 — 미구현 (플러그인 MCP는 Risu RP 루프에 미노출)
+- Risu 모듈 경유 모델 도구 연동 — 미구현 (대신 **replacer**로 RP 억제·주입)
+- RP replacer: 화자/청자는 1차 `binding.characterId`만 — 대시보드 저장값 연동은 후속
+- 스트리밍·의미적 누출: afterRequest는 휴리스틱 redact만 (semantic LLM opt-in 후속)
 - GUI에서 시크릿 **새로 만들기**(빈 폼)는 미구현 — import·스캔·샘플 위주
 - redact/semantic: sidecar·LLM 실패 시 플러그인 휴리스틱만
 ```

@@ -5,13 +5,14 @@ import {
   isBrowserLlmConfigured,
   pluginLorebookScan,
 } from "../llm/browser-client.js";
+import { isRisuLlmProvider } from "../llm/providers.js";
 
 export async function runLorebookScan({
   entries,
   options = {},
   sidecarUrl,
   llm = {},
-  /** Lite: 플러그인에서 외부 LLM(Ollama/OpenAI 호환) 직접 호출 우선 */
+  Risuai,
   preferPluginLlm = false,
 }) {
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -30,20 +31,23 @@ export async function runLorebookScan({
   };
 
   const llmConfig = getBrowserLlmConfig(llm);
-  const pluginLlmReady = isBrowserLlmConfigured(llmConfig);
+  const pluginLlmReady = isBrowserLlmConfigured(llmConfig, Risuai);
+  const usePluginFirst =
+    preferPluginLlm || isRisuLlmProvider(llmConfig.providerId);
 
   async function tryPluginLlm() {
     if (!pluginLlmReady) return null;
     const direct = await pluginLorebookScan(
       entries,
       payload.options,
-      llmConfig
+      llmConfig,
+      Risuai
     );
     if (direct.ok && direct.proposals.length) {
       return {
         proposals: direct.proposals,
         llm_used: true,
-        method: "plugin_llm",
+        method: direct.method || "plugin_llm",
         count: direct.proposals.length,
       };
     }
@@ -51,7 +55,7 @@ export async function runLorebookScan({
   }
 
   async function trySidecar() {
-    if (!sidecarUrl) return null;
+    if (!sidecarUrl || isRisuLlmProvider(llmConfig.providerId)) return null;
     const sidecar = await requestLorebookScan(payload, sidecarUrl);
     if (sidecar.ok && sidecar.data?.proposals?.length) {
       return {
@@ -64,7 +68,7 @@ export async function runLorebookScan({
     return null;
   }
 
-  const order = preferPluginLlm
+  const order = usePluginFirst
     ? [tryPluginLlm, trySidecar]
     : [trySidecar, tryPluginLlm];
 

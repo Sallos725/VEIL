@@ -1,10 +1,16 @@
 import {
   LOREBOOK_SCAN_SYSTEM_PROMPT,
+  SEMANTIC_SYSTEM_PROMPT,
+  REWRITE_SYSTEM_PROMPT,
   buildLorebookScanUserPrompt,
+  buildSemanticUserPrompt,
+  buildRewriteUserPrompt,
 } from "./prompts.js";
 import { proposalsFromLlmRaw } from "../lorebook/proposals.js";
+import { getProvider, isRisuLlmProvider } from "./providers.js";
+import { extractJsonObject } from "./json-utils.js";
+import { risuChatCompletion, canUseRisuLlm } from "./risu-model-client.js";
 import { getAccessTokenFromVertexJson } from "./google-auth.js";
-import { getProvider } from "./providers.js";
 
 const DEFAULT_BASE = "http://127.0.0.1:11434/v1";
 const DEFAULT_MODEL = "llama3.2";
@@ -18,6 +24,15 @@ function simpleHash(s) {
   return String(h);
 }
 
+/** @param {import('../risu-types.js').RisuaiPluginApi | undefined} Risuai */
+function httpFetch(Risuai) {
+  if (Risuai?.nativeFetch) return (url, options) => Risuai.nativeFetch(url, options);
+  if (typeof globalThis.fetch === "function") {
+    return globalThis.fetch.bind(globalThis);
+  }
+  return null;
+}
+
 export function getBrowserLlmConfig(overrides = {}) {
   return {
     providerId: overrides.providerId || "custom",
@@ -27,10 +42,18 @@ export function getBrowserLlmConfig(overrides = {}) {
     vertexJson: overrides.vertexJson || "",
     vertexLocation: overrides.vertexLocation || "us-central1",
     vertexProjectId: overrides.vertexProjectId || "",
+    risuMode: overrides.risuMode,
   };
 }
 
-export function isBrowserLlmConfigured(config) {
+/**
+ * @param {ReturnType<typeof getBrowserLlmConfig>} config
+ * @param {import('../risu-types.js').RisuaiPluginApi | undefined} [Risuai]
+ */
+export function isBrowserLlmConfigured(config, Risuai) {
+  if (isRisuLlmProvider(config?.providerId)) {
+    return canUseRisuLlm(Risuai, config.providerId);
+  }
   const provider = getProvider(config?.providerId);
   if (!config?.baseUrl || !config?.model) return false;
   if (provider.authType === "vertexJson") {
@@ -65,23 +88,22 @@ async function resolveAuthorization(config) {
   return config.apiKey || "";
 }
 
-function extractJsonObject(text) {
-  const raw = String(text || "").trim();
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fenced ? fenced[1].trim() : raw;
-  const start = candidate.indexOf("{");
-  const end = candidate.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    return JSON.parse(candidate.slice(start, end + 1));
+/**
+ * @param {import('../risu-types.js').RisuaiPluginApi | undefined} Risuai
+ * @param {Array<{ role: string; content: string }>} messages
+ * @param {ReturnType<typeof getBrowserLlmConfig>} config
+ */
+export async function llmChatCompletion(Risuai, messages, config) {
+  if (isRisuLlmProvider(config.providerId)) {
+    return risuChatCompletion(Risuai, messages, config.providerId);
   }
-  return JSON.parse(candidate);
-}
 
-export async function browserChatCompletion(messages, config) {
-  if (!isBrowserLlmConfigured(config)) {
+  if (!isBrowserLlmConfigured(config, Risuai)) {
     return { ok: false, error: "llm_not_configured" };
   }
-  if (typeof fetch === "undefined") {
+
+  const fetchImpl = httpFetch(Risuai);
+  if (!fetchImpl) {
     return { ok: false, error: "fetch_unavailable" };
   }
 
@@ -99,7 +121,7 @@ export async function browserChatCompletion(messages, config) {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
-    const res = await fetch(`${config.baseUrl}/chat/completions`, {
+    const res = await fetchImpl(`${config.baseUrl}/chat/completions`, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -119,7 +141,11 @@ export async function browserChatCompletion(messages, config) {
         error: data?.error?.message || `llm_http_${res.status}`,
       };
     }
-    return { ok: true, content: data?.choices?.[0]?.message?.content || "" };
+    return {
+      ok: true,
+      content: data?.choices?.[0]?.message?.content || "",
+      via: "http",
+    };
   } catch (error) {
     return {
       ok: false,
@@ -128,8 +154,91 @@ export async function browserChatCompletion(messages, config) {
   }
 }
 
-export async function browserLorebookScan(entries, options, config) {
-  const result = await browserChatCompletion(
+/** @deprecated use llmChatCompletion */
+export async function browserChatCompletion(messages, config, Risuai) {
+  return llmChatCompletion(Risuai, messages, config);
+}
+
+export async function pluginSemanticAssist(Risuai, draft, liteResult, llmConfig) {
+  const result = await llmChatCompletion(
+    Risuai,
+    [
+      { role: "system", content: SEMANTIC_SYSTEM_PROMPT },
+      { role: "user", content: buildSemanticUserPrompt(draft, liteResult) },
+    ],
+    llmConfig
+  );
+  if (!result.ok) return { ok: false, error: result.error };
+
+  try {
+    const parsed = extractJsonObject(result.content);
+    const risk = String(parsed.risk || "none").toLowerCase();
+    const violations = [];
+    if (risk === "high" || risk === "medium") {
+      violations.push({
+        secret_id: "plugin:llm",
+        reason: (parsed.reasons || []).join(" ") || "LLM detected possible spoiler phrasing.",
+        current_stage: "unknown",
+        detected_leak: "(llm assessment)",
+        suggested_rewrite:
+          parsed.suggested_rewrite ||
+          "Use indirect cues appropriate to the current reveal stage.",
+      });
+    }
+    return {
+      ok: true,
+      data: {
+        safe: violations.length === 0,
+        violations,
+        semantic_score: violations.length > 0 ? 0.9 : 0.05,
+        llm_assisted: true,
+      },
+      via: result.via,
+    };
+  } catch {
+    return { ok: false, error: "llm_invalid_json" };
+  }
+}
+
+export async function pluginRewriteAssist(
+  Risuai,
+  draft,
+  targetStage,
+  liteResult,
+  llmConfig
+) {
+  const result = await llmChatCompletion(
+    Risuai,
+    [
+      { role: "system", content: REWRITE_SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: buildRewriteUserPrompt(draft, targetStage, liteResult),
+      },
+    ],
+    llmConfig
+  );
+  if (!result.ok) return { ok: false, error: result.error };
+
+  try {
+    const parsed = extractJsonObject(result.content);
+    return {
+      ok: true,
+      data: {
+        redacted_text: parsed.redacted_text || draft,
+        explanation: parsed.explanation || "",
+        remaining_risk: parsed.remaining_risk || "medium",
+      },
+      via: result.via,
+    };
+  } catch {
+    return { ok: false, error: "llm_invalid_json" };
+  }
+}
+
+export async function browserLorebookScan(entries, options, config, Risuai) {
+  const result = await llmChatCompletion(
+    Risuai,
     [
       { role: "system", content: LOREBOOK_SCAN_SYSTEM_PROMPT },
       { role: "user", content: buildLorebookScanUserPrompt(entries, options) },
@@ -141,27 +250,32 @@ export async function browserLorebookScan(entries, options, config) {
 
   try {
     const parsed = extractJsonObject(result.content);
-    return { ok: true, proposals: parsed.proposals || [] };
+    return { ok: true, proposals: parsed.proposals || [], via: result.via };
   } catch {
     return { ok: false, error: "llm_invalid_json" };
   }
 }
 
-export async function pluginLorebookScan(entries, options, llmConfig) {
+export async function pluginLorebookScan(entries, options, llmConfig, Risuai) {
   const defaultStage = options?.default_stage || "hint";
   const llmResult = await browserLorebookScan(
     entries.slice(0, 24),
     options,
-    llmConfig
+    llmConfig,
+    Risuai
   );
 
   if (!llmResult.ok) {
     return { ok: false, error: llmResult.error };
   }
 
+  const method =
+    llmResult.via === "risu" ? "risu_llm" : "plugin_llm";
+
   return {
     ok: true,
     proposals: proposalsFromLlmRaw(llmResult.proposals, entries, defaultStage),
-    method: "plugin_llm",
+    method,
+    via: llmResult.via,
   };
 }

@@ -44,6 +44,8 @@ export function normalizeLlmSettings(raw) {
 
 function LLM_PROVIDERS_SAFE(id) {
   const ids = [
+    "risu_main",
+    "risu_aux",
     "openai",
     "anthropic",
     "vertex",

@@ -36,7 +36,8 @@ export async function resolvePluginOptions(Risuai, defaults = {}, llmStore = nul
     llm,
     llmRaw,
     llmSettings: settings,
-    llmConfigured: isLlmSettingsConfigured(llmRaw),
+    llmConfigured: isLlmSettingsConfigured(llmRaw, Risuai),
+    risuLlmAvailable: Boolean(Risuai?.runLLMModel),
     llmStore: store,
   };
 }

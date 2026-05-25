@@ -6,6 +6,8 @@ import {
   createSidecarResolver,
 } from "../shared/plugin-options.js";
 import { createLlmSettingsStore } from "../shared/storage/llmSettingsStore.js";
+import { createRpSettingsStore } from "../shared/storage/rp-settings-store.js";
+import { registerVeilReplacers } from "../shared/risu-replacers.js";
 import { VEIL_VERSION } from "../shared/plugin-meta.js";
 
 (async () => {
@@ -18,6 +20,17 @@ import { VEIL_VERSION } from "../shared/plugin-meta.js";
     });
 
     const llmStore = Risuai ? createLlmSettingsStore(Risuai) : null;
+    const rpSettingsStore = Risuai ? createRpSettingsStore(Risuai) : null;
+    if (rpSettingsStore) await rpSettingsStore.load();
+
+    let replacerStatus = { ok: false, reason: "not_registered" };
+    if (Risuai) {
+      replacerStatus = await registerVeilReplacers(Risuai, {
+        secrets,
+        store,
+        rpSettingsStore,
+      });
+    }
     const pluginOptions = Risuai
       ? await resolvePluginOptions(Risuai, {}, llmStore)
       : { sidecarUrl: "", llm: {}, llmRaw: {}, llmConfigured: false };
@@ -35,6 +48,8 @@ import { VEIL_VERSION } from "../shared/plugin-meta.js";
         edition: "lite",
         pluginOptions,
         llmStore,
+        rpSettingsStore,
+        replacerStatus,
         refreshOptions,
         resolveSidecarUrl,
       });

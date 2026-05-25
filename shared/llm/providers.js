@@ -1,4 +1,4 @@
-/** @typedef {'apiKey' | 'vertexJson' | 'none'} LlmAuthType */
+/** @typedef {'apiKey' | 'vertexJson' | 'none' | 'risu'} LlmAuthType */
 
 /**
  * @typedef {object} LlmProviderDef
@@ -11,6 +11,8 @@
  */
 
 export const LLM_PROVIDER_IDS = [
+  "risu_main",
+  "risu_aux",
   "openai",
   "anthropic",
   "vertex",
@@ -21,6 +23,22 @@ export const LLM_PROVIDER_IDS = [
 
 /** @type {Record<string, LlmProviderDef>} */
 export const LLM_PROVIDERS = {
+  risu_main: {
+    id: "risu_main",
+    label: "RisuAI 메인 모델",
+    defaultBaseUrl: "",
+    defaultModel: "",
+    authType: "risu",
+    hint: "RisuAI 앱에 설정된 메인 RP 모델을 사용합니다. API 키 입력 불필요.",
+  },
+  risu_aux: {
+    id: "risu_aux",
+    label: "RisuAI 보조 모델",
+    defaultBaseUrl: "",
+    defaultModel: "",
+    authType: "risu",
+    hint: "RisuAI 보조(Ax) 모델을 사용합니다. API 키 입력 불필요.",
+  },
   openai: {
     id: "openai",
     label: "OpenAI",
@@ -76,6 +94,10 @@ export function getProvider(id) {
   return LLM_PROVIDERS[id] || LLM_PROVIDERS.custom;
 }
 
+export function isRisuLlmProvider(providerId) {
+  return providerId === "risu_main" || providerId === "risu_aux";
+}
+
 /**
  * @param {string} projectId
  * @param {string} location
@@ -121,9 +143,23 @@ export function parseVertexProjectId(raw) {
  * @param {object} settings
  */
 export function settingsToLlmRaw(settings) {
-  const provider = getProvider(settings.providerId);
+  const providerId = settings.providerId || "custom";
+  const provider = getProvider(providerId);
+  if (isRisuLlmProvider(providerId)) {
+    return {
+      providerId,
+      baseUrl: "risu://embedded",
+      model: provider.label,
+      apiKey: "",
+      vertexJson: "",
+      vertexLocation: settings.vertexLocation || "us-central1",
+      vertexProjectId: "",
+      vertexJsonImported: false,
+      risuMode: providerId === "risu_main" ? "model" : "otherAx",
+    };
+  }
   return {
-    providerId: settings.providerId || "custom",
+    providerId,
     baseUrl: resolveBaseUrlForSettings(settings),
     model: (settings.model || provider.defaultModel || "").trim(),
     apiKey: settings.apiKey || "",
@@ -136,8 +172,12 @@ export function settingsToLlmRaw(settings) {
 
 /**
  * @param {object} raw
+ * @param {import('../risu-types.js').RisuaiPluginApi | undefined} [Risuai]
  */
-export function isLlmSettingsConfigured(raw) {
+export function isLlmSettingsConfigured(raw, Risuai) {
+  if (isRisuLlmProvider(raw?.providerId)) {
+    return Boolean(Risuai?.runLLMModel);
+  }
   const base = raw?.baseUrl;
   const model = raw?.model;
   if (!base || !model) return false;

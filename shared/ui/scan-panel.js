@@ -7,6 +7,7 @@ import {
   BINDING_GUIDE,
 } from "../chat-binding.js";
 import { stageLabelKo } from "./labels.js";
+import { isRisuLlmProvider } from "../llm/providers.js";
 
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -38,6 +39,7 @@ function uniqueId(base, existing) {
 const METHOD_LABELS = {
   sidecar: "사이드카 LLM",
   plugin_llm: "플러그인 → 외부 LLM",
+  risu_llm: "RisuAI 메인/보조 LLM",
   heuristic: "로컬 (항목당 1개, LLM 없음)",
 };
 
@@ -239,6 +241,7 @@ export function mountScanPanel(panel, ctx) {
       return;
     }
     statusLine.textContent = "LLM 분석 중… (항목당 제안 1개)";
+    const llmRaw = opts.llmRaw || opts.llm || {};
     const result = await runLorebookScan({
       entries: selected,
       options: {
@@ -246,8 +249,12 @@ export function mountScanPanel(panel, ctx) {
         language: "ko",
       },
       sidecarUrl: opts.sidecarUrl || undefined,
-      llm: opts.llmRaw || opts.llm || {},
-      preferPluginLlm: edition === "lite" || !opts.sidecarUrl,
+      llm: llmRaw,
+      Risuai,
+      preferPluginLlm:
+        edition === "lite" ||
+        !opts.sidecarUrl ||
+        isRisuLlmProvider(llmRaw.providerId),
     });
 
     proposals = result.proposals || [];

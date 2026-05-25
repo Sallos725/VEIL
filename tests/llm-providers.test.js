@@ -34,6 +34,25 @@ describe("llm providers", () => {
     assert.equal(isLlmSettingsConfigured(raw), true);
   });
 
+  it("risu_main requires runLLMModel", () => {
+    const raw = settingsToLlmRaw(
+      normalizeLlmSettings({ providerId: "risu_main" })
+    );
+    assert.equal(isLlmSettingsConfigured(raw), false);
+    assert.equal(isLlmSettingsConfigured(raw, { runLLMModel: async () => "" }), true);
+  });
+
+  it("settingsToLlmRaw maps risu providers", () => {
+    const main = settingsToLlmRaw(
+      normalizeLlmSettings({ providerId: "risu_main" })
+    );
+    assert.equal(main.risuMode, "model");
+    const aux = settingsToLlmRaw(
+      normalizeLlmSettings({ providerId: "risu_aux" })
+    );
+    assert.equal(aux.risuMode, "otherAx");
+  });
+
   it("vertex requires json", () => {
     const raw = settingsToLlmRaw(
       normalizeLlmSettings({
