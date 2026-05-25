@@ -1,36 +1,12 @@
 import { initVeilRuntime } from "../../shared/storage/secretStore.js";
-import { BASE_TOOLS, FULL_EXTRA_TOOLS } from "../../shared/mcp/tools.js";
-import {
-  createFullToolHandler,
-  createDefaultSidecarResolver,
-} from "../../shared/mcp/handlers.js";
 import { registerVeilUI } from "../../shared/ui/register.js";
 import { getSidecarUrl } from "../../shared/sidecar-client.js";
 import { resolvePluginOptions } from "../../shared/plugin-options.js";
 import { createLlmSettingsStore } from "../../shared/storage/llmSettingsStore.js";
+import { createDefaultSidecarResolver } from "../../shared/veil-service.js";
+import { VEIL_VERSION } from "../../shared/plugin-meta.js";
 
 const DEFAULT_SIDECAR_URL = "http://127.0.0.1:6010";
-
-async function registerVeilFull(Risuai, secrets, store, resolveSidecarUrl) {
-  if (!Risuai || !Risuai.registerMCP) {
-    console.log("[VEIL Full] Risuai.registerMCP is not available.");
-    return;
-  }
-
-  await Risuai.registerMCP(
-    {
-      identifier: "plugin:veil_full",
-      name: "VEIL Full",
-      version: "0.0.1",
-      description:
-        "Visibility Enforcement & Integrity Layer with optional sidecar assistance.",
-    },
-    async () => [...BASE_TOOLS, ...FULL_EXTRA_TOOLS],
-    createFullToolHandler(secrets, store, resolveSidecarUrl, Risuai)
-  );
-
-  console.log("[VEIL Full] MCP module registered.");
-}
 
 (async () => {
   try {
@@ -53,7 +29,12 @@ async function registerVeilFull(Risuai, secrets, store, resolveSidecarUrl) {
           { sidecarUrl: DEFAULT_SIDECAR_URL },
           llmStore
         )
-      : { sidecarUrl: DEFAULT_SIDECAR_URL, llm: {}, llmRaw: {}, llmConfigured: false };
+      : {
+          sidecarUrl: DEFAULT_SIDECAR_URL,
+          llm: {},
+          llmRaw: {},
+          llmConfigured: false,
+        };
     const refreshOptions = Risuai
       ? () =>
           resolvePluginOptions(
@@ -64,7 +45,6 @@ async function registerVeilFull(Risuai, secrets, store, resolveSidecarUrl) {
       : null;
 
     if (Risuai) {
-      await registerVeilFull(Risuai, secrets, store, resolveSidecarUrl);
       await registerVeilUI(Risuai, {
         secrets,
         store,
@@ -74,6 +54,7 @@ async function registerVeilFull(Risuai, secrets, store, resolveSidecarUrl) {
         llmStore,
         refreshOptions,
       });
+      console.log(`[VEIL Full ${VEIL_VERSION}] GUI registered (sidecar required, no MCP).`);
     } else {
       console.log("[VEIL Full] Risuai is not available (dev/bundle context).");
     }
