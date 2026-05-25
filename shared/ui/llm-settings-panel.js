@@ -226,7 +226,7 @@ export function mountLlmSettingsPanel(panel, ctx) {
   if (state.sidecarInput) {
     panel.appendChild(
       el("div", { className: "field" }, [
-        el("label", { text: "Sidecar URL (Full, 선택)" }),
+        el("label", { text: "Sidecar URL (Full)" }),
         state.sidecarInput,
       ])
     );

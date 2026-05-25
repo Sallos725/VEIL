@@ -21,12 +21,11 @@ export async function resolvePluginOptions(Risuai, defaults = {}, llmStore = nul
     settings = await store.load();
   }
 
-  if (Risuai?.getArgument) {
+  if (settings.sidecarUrl) {
+    sidecarUrl = settings.sidecarUrl;
+  } else if (Risuai?.getArgument) {
     const argSidecar = await Risuai.getArgument("sidecar_url");
     if (argSidecar) sidecarUrl = String(argSidecar);
-    else if (settings.sidecarUrl) sidecarUrl = settings.sidecarUrl;
-  } else if (settings.sidecarUrl) {
-    sidecarUrl = settings.sidecarUrl;
   }
 
   const llmRaw = settingsToLlmRaw(settings);
@@ -42,13 +41,19 @@ export async function resolvePluginOptions(Risuai, defaults = {}, llmStore = nul
   };
 }
 
-export async function createSidecarResolver(Risuai, defaultUrl = "") {
-  const opts = await resolvePluginOptions(Risuai, {
-    sidecarUrl: defaultUrl || "",
-  });
+export async function createSidecarResolver(
+  Risuai,
+  defaultUrl = "",
+  llmStore = null
+) {
   return async function resolveSidecarUrl(ctx) {
     const fromCtx = ctx && ctx.sidecar_url;
     if (fromCtx) return getSidecarUrl(fromCtx);
+    const opts = await resolvePluginOptions(
+      Risuai,
+      { sidecarUrl: defaultUrl || "" },
+      llmStore
+    );
     if (opts.sidecarUrl) return opts.sidecarUrl;
     if (defaultUrl) return getSidecarUrl(defaultUrl);
     return "";

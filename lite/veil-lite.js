@@ -1845,12 +1845,11 @@ Korean titles preferred if source is Korean.`;
     if (store) {
       settings = await store.load();
     }
-    if (Risuai?.getArgument) {
+    if (settings.sidecarUrl) {
+      sidecarUrl = settings.sidecarUrl;
+    } else if (Risuai?.getArgument) {
       const argSidecar = await Risuai.getArgument("sidecar_url");
       if (argSidecar) sidecarUrl = String(argSidecar);
-      else if (settings.sidecarUrl) sidecarUrl = settings.sidecarUrl;
-    } else if (settings.sidecarUrl) {
-      sidecarUrl = settings.sidecarUrl;
     }
     const llmRaw = settingsToLlmRaw(settings);
     const llm = getBrowserLlmConfig(llmRaw);
@@ -1863,13 +1862,15 @@ Korean titles preferred if source is Korean.`;
       llmStore: store
     };
   }
-  async function createSidecarResolver(Risuai, defaultUrl = "") {
-    const opts = await resolvePluginOptions(Risuai, {
-      sidecarUrl: defaultUrl || ""
-    });
+  async function createSidecarResolver(Risuai, defaultUrl = "", llmStore = null) {
     return async function resolveSidecarUrl(ctx) {
       const fromCtx = ctx && ctx.sidecar_url;
       if (fromCtx) return getSidecarUrl(fromCtx);
+      const opts = await resolvePluginOptions(
+        Risuai,
+        { sidecarUrl: defaultUrl || "" },
+        llmStore
+      );
       if (opts.sidecarUrl) return opts.sidecarUrl;
       if (defaultUrl) return getSidecarUrl(defaultUrl);
       return "";
@@ -2842,7 +2843,7 @@ Secrets should be foreshadowed, hinted, partially revealed, and fully revealed o
     if (state.sidecarInput) {
       panel.appendChild(
         el2("div", { className: "field" }, [
-          el2("label", { text: "Sidecar URL (Full, \uC120\uD0DD)" }),
+          el2("label", { text: "Sidecar URL (Full)" }),
           state.sidecarInput
         ])
       );
@@ -3213,6 +3214,16 @@ Secrets should be foreshadowed, hinted, partially revealed, and fully revealed o
   }
 
   // shared/ui/dashboard.js
+  var DEFAULT_SIDECAR_URL2 = "http://127.0.0.1:6010";
+  async function persistSidecarUrl(llmStore, url, refreshOptions) {
+    if (!llmStore) return null;
+    const current = await llmStore.load();
+    await llmStore.save({
+      ...current,
+      sidecarUrl: String(url || "").trim()
+    });
+    return refreshOptions ? refreshOptions() : null;
+  }
   function el4(tag, attrs = {}, children = []) {
     const node = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {
@@ -3381,19 +3392,55 @@ curl http://127.0.0.1:6010/health`
       gate.appendChild(
         el4("p", {
           className: "veil-sub",
+          text: "\uD50C\uB7EC\uADF8\uC778 \uC124\uC815 \uBA54\uB274\uC5D0\uC11C URL\uC744 \uB123\uC744 \uD544\uC694 \uC5C6\uC2B5\uB2C8\uB2E4. sidecar\uB97C \uB744\uC6B4 \uB4A4 \uC544\uB798 URL\uC744 \uD655\uC778\uD558\uACE0 \uC5F0\uACB0\uD558\uC138\uC694."
+        })
+      );
+      const sidecarUrlInput = el4("input", {
+        className: "veil-input",
+        placeholder: DEFAULT_SIDECAR_URL2,
+        value: pluginOptions.sidecarUrl || DEFAULT_SIDECAR_URL2
+      });
+      gate.appendChild(
+        el4("div", { className: "field" }, [
+          el4("label", { text: "Sidecar URL" }),
+          sidecarUrlInput
+        ])
+      );
+      gate.appendChild(
+        el4("p", {
+          className: "veil-sub",
           text: "\uD50C\uB7EC\uADF8\uC778\uB9CC\uC73C\uB85C RP\uD558\uB294 Lite\uAC00 \uD544\uC694\uD558\uBA74 veil-lite.js\uB97C \uC0AC\uC6A9\uD558\uC138\uC694."
         })
       );
       gate.appendChild(
         el4("button", {
           className: "btn btn-primary",
-          text: "\uC5F0\uACB0 \uB2E4\uC2DC \uD655\uC778",
+          text: "URL \uC800\uC7A5 \uD6C4 \uC5F0\uACB0 \uD655\uC778",
           onclick: async () => {
+            const url = sidecarUrlInput.value.trim() || DEFAULT_SIDECAR_URL2;
+            if (llmStore) {
+              const next = await persistSidecarUrl(
+                llmStore,
+                url,
+                refreshOptions
+              );
+              if (next) pluginOptions = next;
+            }
             if (store.refreshHealth) {
               await store.refreshHealth();
               status = store.getStatus();
-              if (status.sidecarOnline) location.reload();
-              else alert("\uC544\uC9C1 sidecar\uC5D0 \uC5F0\uACB0\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+              if (status.sidecarOnline) {
+                await store.load();
+                location.reload();
+              } else {
+                alert(
+                  `sidecar\uC5D0 \uC5F0\uACB0\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.
+
+URL: ${url}
+
+sidecar\uAC00 \uC2E4\uD589 \uC911\uC778\uC9C0, \uBC29\uD654\uBCBD\xB7\uD3EC\uD2B8(6010)\uB97C \uD655\uC778\uD558\uC138\uC694.`
+                );
+              }
             }
           }
         })
@@ -4095,7 +4142,7 @@ curl http://127.0.0.1:6010/health`
         }
       })
     );
-    if (!fullBlocked) {
+    if (!fullBlocked && panels.scan) {
       mountScanPanel(panels.scan, {
         Risuai,
         secrets,
@@ -4106,12 +4153,8 @@ curl http://127.0.0.1:6010/health`
         binding,
         bindResult
       });
-    } else {
-      panels.scan.appendChild(
-        el4("p", { className: "veil-sub", text: "sidecar \uC5F0\uACB0 \uD6C4 \uC2A4\uCE94\uC744 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." })
-      );
     }
-    if (llmStore && !fullBlocked) {
+    if (llmStore && !fullBlocked && panels.settings) {
       mountLlmSettingsPanel(panels.settings, {
         Risuai,
         llmStore,
@@ -4125,15 +4168,11 @@ curl http://127.0.0.1:6010/health`
           if (opts) pluginOptions = opts;
         }
       });
-    } else if (fullBlocked) {
-      panels.settings.appendChild(
-        el4("p", { className: "veil-sub", text: "sidecar \uC5F0\uACB0 \uD6C4 LLM \uC124\uC815\uC744 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." })
-      );
-    } else {
+    } else if (panels.settings) {
       panels.settings.appendChild(
         el4("p", {
           className: "veil-sub",
-          text: "LLM \uC124\uC815 \uC800\uC7A5\uC18C\uB97C \uC0AC\uC6A9\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4."
+          text: fullBlocked ? "sidecar \uC5F0\uACB0 \uD6C4 LLM \uC124\uC815\uC744 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." : "LLM \uC124\uC815 \uC800\uC7A5\uC18C\uB97C \uC0AC\uC6A9\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4."
         })
       );
     }

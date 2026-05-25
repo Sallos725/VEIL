@@ -11,8 +11,13 @@ const DEFAULT_SIDECAR_URL = "http://127.0.0.1:6010";
 (async () => {
   try {
     const Risuai = typeof globalThis.Risuai !== "undefined" ? globalThis.Risuai : undefined;
+    const llmStore = Risuai ? createLlmSettingsStore(Risuai) : null;
     const resolveSidecarUrl = Risuai
-      ? await createDefaultSidecarResolver(Risuai, DEFAULT_SIDECAR_URL)
+      ? await createDefaultSidecarResolver(
+          Risuai,
+          DEFAULT_SIDECAR_URL,
+          llmStore
+        )
       : async () => getSidecarUrl(DEFAULT_SIDECAR_URL);
 
     const { store, secrets } = await initVeilRuntime({
@@ -22,7 +27,6 @@ const DEFAULT_SIDECAR_URL = "http://127.0.0.1:6010";
       getSidecarUrl: resolveSidecarUrl,
     });
 
-    const llmStore = Risuai ? createLlmSettingsStore(Risuai) : null;
     const pluginOptions = Risuai
       ? await resolvePluginOptions(
           Risuai,

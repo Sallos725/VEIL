@@ -44,6 +44,19 @@ import {
 } from "../storage/session-secrets.js";
 import { attachSecretEditorToCard } from "./secret-editor.js";
 import { VEIL_DISPLAY_VERSION } from "../plugin-meta.js";
+
+const DEFAULT_SIDECAR_URL = "http://127.0.0.1:6010";
+
+async function persistSidecarUrl(llmStore, url, refreshOptions) {
+  if (!llmStore) return null;
+  const current = await llmStore.load();
+  await llmStore.save({
+    ...current,
+    sidecarUrl: String(url || "").trim(),
+  });
+  return refreshOptions ? refreshOptions() : null;
+}
+
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -238,19 +251,51 @@ curl http://127.0.0.1:6010/health`,
     gate.appendChild(
       el("p", {
         className: "veil-sub",
+        text: "플러그인 설정 메뉴에서 URL을 넣을 필요 없습니다. sidecar를 띄운 뒤 아래 URL을 확인하고 연결하세요.",
+      })
+    );
+    const sidecarUrlInput = el("input", {
+      className: "veil-input",
+      placeholder: DEFAULT_SIDECAR_URL,
+      value: pluginOptions.sidecarUrl || DEFAULT_SIDECAR_URL,
+    });
+    gate.appendChild(
+      el("div", { className: "field" }, [
+        el("label", { text: "Sidecar URL" }),
+        sidecarUrlInput,
+      ])
+    );
+    gate.appendChild(
+      el("p", {
+        className: "veil-sub",
         text: "플러그인만으로 RP하는 Lite가 필요하면 veil-lite.js를 사용하세요.",
       })
     );
     gate.appendChild(
       el("button", {
         className: "btn btn-primary",
-        text: "연결 다시 확인",
+        text: "URL 저장 후 연결 확인",
         onclick: async () => {
+          const url = sidecarUrlInput.value.trim() || DEFAULT_SIDECAR_URL;
+          if (llmStore) {
+            const next = await persistSidecarUrl(
+              llmStore,
+              url,
+              refreshOptions
+            );
+            if (next) pluginOptions = next;
+          }
           if (store.refreshHealth) {
             await store.refreshHealth();
             status = store.getStatus();
-            if (status.sidecarOnline) location.reload();
-            else alert("아직 sidecar에 연결되지 않았습니다.");
+            if (status.sidecarOnline) {
+              await store.load();
+              location.reload();
+            } else {
+              alert(
+                `sidecar에 연결되지 않았습니다.\n\nURL: ${url}\n\nsidecar가 실행 중인지, 방화벽·포트(6010)를 확인하세요.`
+              );
+            }
           }
         },
       })
@@ -1011,24 +1056,20 @@ curl http://127.0.0.1:6010/health`,
     })
   );
 
-  if (!fullBlocked) {
+  if (!fullBlocked && panels.scan) {
     mountScanPanel(panels.scan, {
-    Risuai,
-    secrets,
-    store,
-    edition,
-    resolveSidecarUrl,
-    pluginOptions,
-    binding,
-    bindResult,
-  });
-  } else {
-    panels.scan.appendChild(
-      el("p", { className: "veil-sub", text: "sidecar 연결 후 스캔을 사용할 수 있습니다." })
-    );
+      Risuai,
+      secrets,
+      store,
+      edition,
+      resolveSidecarUrl,
+      pluginOptions,
+      binding,
+      bindResult,
+    });
   }
 
-  if (llmStore && !fullBlocked) {
+  if (llmStore && !fullBlocked && panels.settings) {
     mountLlmSettingsPanel(panels.settings, {
       Risuai,
       llmStore,
@@ -1044,15 +1085,13 @@ curl http://127.0.0.1:6010/health`,
         if (opts) pluginOptions = opts;
       },
     });
-  } else if (fullBlocked) {
-    panels.settings.appendChild(
-      el("p", { className: "veil-sub", text: "sidecar 연결 후 LLM 설정을 사용할 수 있습니다." })
-    );
-  } else {
+  } else if (panels.settings) {
     panels.settings.appendChild(
       el("p", {
         className: "veil-sub",
-        text: "LLM 설정 저장소를 사용할 수 없습니다.",
+        text: fullBlocked
+          ? "sidecar 연결 후 LLM 설정을 사용할 수 있습니다."
+          : "LLM 설정 저장소를 사용할 수 없습니다.",
       })
     );
   }

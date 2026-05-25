@@ -4,4 +4,4 @@
 //@display-name VEIL Full
 //@update-url https://raw.githubusercontent.com/Sallos725/VEIL/main/full/plugin/veil-full.js
 //@link https://github.com/Sallos725/VEIL VEIL — GitHub
-//@arg sidecar_url string VEIL sidecar base URL (default http://127.0.0.1:6010). LLM은 GUI 「LLM 설정」 탭 권장.
+//@arg sidecar_url string Sidecar URL (선택, 기본 http://127.0.0.1:6010). 대시보드에서도 변경 가능.
