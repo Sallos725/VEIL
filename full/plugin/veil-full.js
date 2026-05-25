@@ -4,7 +4,6 @@
 //@display-name VEIL Full
 //@update-url https://raw.githubusercontent.com/Sallos725/VEIL/main/full/plugin/veil-full.js
 //@link https://github.com/Sallos725/VEIL VEIL — GitHub
-//@link https://github.com/Sallos725/VEIL/blob/main/docs/HANDOFF.md 설치·사용 가이드
 //@arg sidecar_url string VEIL sidecar base URL (default http://127.0.0.1:6010). LLM은 GUI 「LLM 설정」 탭 권장.
 
 (() => {
@@ -3372,9 +3371,10 @@ Secrets should be foreshadowed, hinted, partially revealed, and fully revealed o
       gate.appendChild(
         el4("pre", {
           className: "veil-code",
-          text: `docker pull ghcr.io/sallos725/veil-sidecar:${VEIL_RELEASE_TAG}
-cd full
-docker compose -f docker-compose.release.yml up -d
+          text: `Release: veil-full-${VEIL_RELEASE_TAG}.js + veil-sidecar-${VEIL_RELEASE_TAG}.zip
+ZIP: ./full/sidecar/scripts/start-node.sh
+Docker: docker pull ghcr.io/sallos725/veil-sidecar:${VEIL_RELEASE_TAG}
+  cd full && docker compose up -d
 curl http://127.0.0.1:6010/health`
         })
       );

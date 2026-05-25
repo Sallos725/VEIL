@@ -4,5 +4,4 @@
 //@display-name VEIL Full
 //@update-url https://raw.githubusercontent.com/Sallos725/VEIL/main/full/plugin/veil-full.js
 //@link https://github.com/Sallos725/VEIL VEIL — GitHub
-//@link https://github.com/Sallos725/VEIL/blob/main/docs/HANDOFF.md 설치·사용 가이드
 //@arg sidecar_url string VEIL sidecar base URL (default http://127.0.0.1:6010). LLM은 GUI 「LLM 설정」 탭 권장.

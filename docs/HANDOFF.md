@@ -207,15 +207,17 @@ git push origin v0.0.1
 1. 태그에서 버전 추출 → `scripts/sync-version.mjs`가 `package.json`, `lite/banner.txt`, `full/plugin/banner.txt` 동기화
 2. `npm run bundle` → `npm test`
 3. **GHCR**에 sidecar 이미지 push: `ghcr.io/sallos725/veil-sidecar:<tag>` (+ semver, `latest`)
-4. GitHub Release 첨부:
-   - `lite/veil-lite.js`, `full/plugin/veil-full.js`
-   - `full/docker-compose.release.yml` (위 이미지 고정, `docker compose up`용)
+4. `node scripts/prepare-release-assets.mjs <tag>` → `dist/release/`:
+   - `veil-lite-<tag>.js`, `veil-full-<tag>.js`
+   - `veil-sidecar-<tag>.zip` (sidecar + 최소 `shared/` + ZIP 내 compose)
+   - `docker-compose-<tag>.yml`
 
 Sidecar 배포 예:
 
 ```bash
 docker pull ghcr.io/sallos725/veil-sidecar:v0.0.1
-cd full && docker compose -f docker-compose.release.yml up -d
+# Release ZIP: unzip 후 cd full && docker compose up -d
+# 또는 docker-compose-v0.0.1.yml
 ```
 
 로컬에서 이미지 빌드: 저장소 루트에서 `docker build -f full/sidecar/Dockerfile .`

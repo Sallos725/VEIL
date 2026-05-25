@@ -228,9 +228,10 @@ export async function openDashboard(doc, ctx) {
     gate.appendChild(
       el("pre", {
         className: "veil-code",
-        text: `docker pull ghcr.io/sallos725/veil-sidecar:${VEIL_RELEASE_TAG}
-cd full
-docker compose -f docker-compose.release.yml up -d
+        text: `Release: veil-full-${VEIL_RELEASE_TAG}.js + veil-sidecar-${VEIL_RELEASE_TAG}.zip
+ZIP: ./full/sidecar/scripts/start-node.sh
+Docker: docker pull ghcr.io/sallos725/veil-sidecar:${VEIL_RELEASE_TAG}
+  cd full && docker compose up -d
 curl http://127.0.0.1:6010/health`,
       })
     );

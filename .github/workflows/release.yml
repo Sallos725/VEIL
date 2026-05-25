@@ -42,6 +42,9 @@ jobs:
       - name: Prepare release compose (image tag)
         run: node scripts/prepare-release-compose.mjs "${{ github.ref_name }}"
 
+      - name: Prepare release assets (versioned names + sidecar zip)
+        run: node scripts/prepare-release-assets.mjs "${{ github.ref_name }}"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -98,8 +101,9 @@ jobs:
           generate_release_notes: true
           body_path: docs/RELEASE-v0.1.0-beta.md
           files: |
-            lite/veil-lite.js
-            full/plugin/veil-full.js
-            full/docker-compose.release.yml
+            dist/release/veil-lite-${{ github.ref_name }}.js
+            dist/release/veil-full-${{ github.ref_name }}.js
+            dist/release/veil-sidecar-${{ github.ref_name }}.zip
+            dist/release/docker-compose-${{ github.ref_name }}.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

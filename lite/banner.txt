@@ -4,5 +4,4 @@
 //@display-name VEIL Lite
 //@update-url https://raw.githubusercontent.com/Sallos725/VEIL/main/lite/veil-lite.js
 //@link https://github.com/Sallos725/VEIL VEIL — GitHub
-//@link https://github.com/Sallos725/VEIL/blob/main/docs/HANDOFF.md 설치·사용 가이드
 //@arg sidecar_url string Optional VEIL sidecar URL (LLM·스캔은 GUI 「LLM 설정」 탭 권장)
