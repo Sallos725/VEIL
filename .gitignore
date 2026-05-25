@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# sidecar
+full/sidecar/node_modules/
+
+# env & secrets
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# logs & coverage
+*.log
+coverage/
+
+# optional build scratch
+dist/
