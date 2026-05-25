@@ -205,10 +205,11 @@
 
   // shared/storage/sidecarStore.js
   var CACHE_KEY = "veil_secrets_cache";
+  var SIDECAR_REQUIRED_MSG = "VEIL Full\uC740 sidecar\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4. Docker\uB85C sidecar\uB97C \uC2E4\uD589\uD55C \uB4A4 \uB2E4\uC2DC \uC5EC\uC138\uC694.";
   function createSidecarStore(ctx) {
     const { Risuai, getSidecarUrl: resolveUrl } = ctx;
-    let memory = null;
-    let lastSource = "sample";
+    let memory = [];
+    let lastSource = "unavailable";
     let sidecarOnline = false;
     async function getStorage() {
       if (!Risuai || !Risuai.getLocalPluginStorage) return null;
@@ -230,8 +231,19 @@
       if (resolveUrl) return resolveUrl();
       return getSidecarUrl(ctx.sidecarUrl);
     }
+    function unavailablePayload(cached) {
+      return {
+        secrets: cached ? JSON.parse(JSON.stringify(cached)) : [],
+        source: cached ? "cache" : "unavailable",
+        sidecarOnline: false,
+        sidecarRequired: true,
+        readOnly: true,
+        error: SIDECAR_REQUIRED_MSG
+      };
+    }
     return {
       edition: "full",
+      sidecarRequired: true,
       async load() {
         const url = await baseUrl();
         const health = await checkSidecarHealth(url);
@@ -242,23 +254,34 @@
             memory = JSON.parse(JSON.stringify(result.data.secrets));
             lastSource = "sidecar";
             await saveCache(memory);
-            return { secrets: memory, source: lastSource, sidecarOnline: true };
+            return {
+              secrets: memory,
+              source: lastSource,
+              sidecarOnline: true,
+              sidecarRequired: true,
+              readOnly: false
+            };
           }
         }
         const cached = await loadCache();
-        if (cached) {
-          memory = JSON.parse(JSON.stringify(cached));
-          lastSource = "cache";
-          return { secrets: memory, source: lastSource, sidecarOnline };
-        }
-        memory = cloneSampleSecrets();
-        lastSource = "sample";
-        return { secrets: memory, source: lastSource, sidecarOnline };
+        memory = cached ? JSON.parse(JSON.stringify(cached)) : [];
+        lastSource = cached ? "cache" : "unavailable";
+        return unavailablePayload(cached);
       },
       async save(secrets) {
+        const url = await baseUrl();
+        const health = await checkSidecarHealth(url);
+        sidecarOnline = health.reachable;
+        if (!sidecarOnline) {
+          return {
+            ok: false,
+            error: SIDECAR_REQUIRED_MSG,
+            source: lastSource,
+            sidecarSynced: false
+          };
+        }
         memory = secrets;
         await saveCache(secrets);
-        const url = await baseUrl();
         const result = await fetchSidecar("/secrets", {
           method: "PUT",
           baseUrl: url,
@@ -266,21 +289,37 @@
         });
         sidecarOnline = result.ok;
         lastSource = result.ok ? "sidecar" : "cache";
+        if (!result.ok) {
+          return {
+            ok: false,
+            error: result.error || "Sidecar \uC800\uC7A5 \uC2E4\uD328",
+            source: lastSource,
+            sidecarSynced: false
+          };
+        }
         return {
           ok: true,
           source: lastSource,
-          sidecarSynced: result.ok,
-          error: result.ok ? void 0 : result.error
+          sidecarSynced: true
         };
       },
       getStatus() {
-        return { source: lastSource, sidecarOnline };
+        return {
+          source: lastSource,
+          sidecarOnline,
+          sidecarRequired: true,
+          readOnly: !sidecarOnline
+        };
       },
       async importSecrets(secrets) {
         if (!validateSecrets(secrets)) {
           return { ok: false, error: "\uC720\uD6A8\uD558\uC9C0 \uC54A\uC740 \uC2DC\uD06C\uB9BF JSON\uC785\uB2C8\uB2E4." };
         }
         const url = await baseUrl();
+        const health = await checkSidecarHealth(url);
+        if (!health.reachable) {
+          return { ok: false, error: SIDECAR_REQUIRED_MSG };
+        }
         const result = await fetchSidecar("/secrets/import", {
           method: "POST",
           baseUrl: url,
@@ -293,8 +332,10 @@
           sidecarOnline = true;
           return { ok: true };
         }
-        await this.save(JSON.parse(JSON.stringify(secrets)));
-        return { ok: true, fallback: true };
+        return {
+          ok: false,
+          error: result.error || "Sidecar import \uC2E4\uD328"
+        };
       },
       async exportSecrets() {
         const url = await baseUrl();
@@ -308,7 +349,7 @@
         const url = await baseUrl();
         const health = await checkSidecarHealth(url);
         sidecarOnline = health.reachable;
-        return health;
+        return { ...health, sidecarRequired: true };
       }
     };
   }
@@ -333,103 +374,326 @@
     };
   }
 
-  // shared/mcp/tools.js
-  var MODE_ENUM = ["ic", "ooc", "narrator", "system", "debug"];
-  var STAGE_ENUM = [
-    "sealed",
-    "foreshadow",
-    "hint",
-    "partial",
-    "near_reveal",
-    "revealed"
-  ];
-  var BASE_TOOLS = [
-    {
-      name: "get_reveal_guidance",
-      description: "Returns stage-appropriate guidance for foreshadowing, hints, partial reveals, or full reveals without spoiling secrets early.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          user_input: { type: "string" },
-          speaker_id: { type: "string" },
-          listener_ids: { type: "array", items: { type: "string" } },
-          persona_id: { type: "string" },
-          scene_tags: { type: "array", items: { type: "string" } },
-          active_flags: { type: "array", items: { type: "string" } },
-          mode: { type: "string", enum: MODE_ENUM }
-        },
-        required: ["user_input"]
-      }
-    },
-    {
-      name: "check_disclosure",
-      description: "Checks whether a draft response prematurely reveals hidden character, persona, or plot secrets.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          draft_text: { type: "string" },
-          speaker_id: { type: "string" },
-          listener_ids: { type: "array", items: { type: "string" } },
-          persona_id: { type: "string" },
-          scene_tags: { type: "array", items: { type: "string" } },
-          active_flags: { type: "array", items: { type: "string" } },
-          mode: { type: "string", enum: MODE_ENUM },
-          sidecar_url: { type: "string" }
-        },
-        required: ["draft_text"]
-      }
-    },
-    {
-      name: "redact_to_allowed_stage",
-      description: "Returns a conservative redaction/rewrite guidance for a draft according to a target reveal stage.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          draft_text: { type: "string" },
-          target_stage: { type: "string", enum: STAGE_ENUM },
-          speaker_id: { type: "string" },
-          listener_ids: { type: "array", items: { type: "string" } },
-          mode: { type: "string", enum: MODE_ENUM },
-          sidecar_url: { type: "string" }
-        },
-        required: ["draft_text", "target_stage"]
-      }
-    },
-    {
-      name: "advance_reveal_stage",
-      description: "Moves a secret to a later reveal stage when narrative conditions are met (manual only).",
-      inputSchema: {
-        type: "object",
-        properties: {
-          secret_id: { type: "string" },
-          new_stage: { type: "string", enum: STAGE_ENUM },
-          reason: { type: "string" },
-          manual: { type: "boolean" }
-        },
-        required: ["secret_id", "new_stage", "manual"]
-      }
-    },
-    {
-      name: "list_active_secrets",
-      description: "Lists non-sensitive metadata about active secrets for debugging or user management.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          mode: { type: "string", enum: MODE_ENUM }
-        }
-      }
-    }
-  ];
-  var FULL_EXTRA_TOOLS = [
-    {
-      name: "check_sidecar_status",
-      description: "Checks whether the optional VEIL sidecar is reachable on localhost.",
-      inputSchema: {
-        type: "object",
-        properties: { sidecar_url: { type: "string" } }
-      }
-    }
-  ];
+  // shared/ui/icons.js
+  var VEIL_BUTTON_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>`;
+
+  // shared/ui/styles.js
+  var DASHBOARD_CSS = `
+:root {
+  color-scheme: dark;
+  font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: #12121f;
+  color: #e8e8f0;
+  min-height: 100vh;
+}
+.veil-app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px;
+}
+.veil-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.veil-title { font-size: 1.25rem; font-weight: 700; margin: 0; }
+.veil-sub { font-size: 0.85rem; color: #9aa0b8; margin: 4px 0 0; }
+.veil-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip-version {
+  border-color: #5a8fd4;
+  background: #1a2840;
+  color: #b8d4ff;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  background: #2a2a44;
+}
+.chip.ok { background: #1f4d3a; color: #9ef0c5; }
+.chip.warn { background: #4d3a1f; color: #f0d69e; }
+.chip.off { background: #3a2a2a; color: #f0a0a0; }
+.veil-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #2e2e48;
+  padding-bottom: 8px;
+}
+.veil-tab {
+  background: transparent;
+  border: none;
+  color: #9aa0b8;
+  padding: 10px 14px;
+  min-height: 44px;
+  cursor: pointer;
+  border-radius: 8px;
+  font-size: 0.95rem;
+}
+.veil-tab.active {
+  color: #fff;
+  background: #2d2d50;
+}
+.veil-panel { display: none; }
+.veil-panel.active { display: block; }
+.btn {
+  min-height: 44px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.btn-primary { background: #5b6cff; color: #fff; }
+.btn-secondary { background: #2a2a44; color: #e8e8f0; }
+.btn-danger { background: #5c2a2a; color: #ffc9c9; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.card {
+  background: #1a1a2e;
+  border: 1px solid #2e2e48;
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.card h3 { margin: 0 0 8px; font-size: 1rem; }
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  background: #3a3a60;
+  margin-right: 6px;
+}
+.field { margin-bottom: 12px; }
+.field label {
+  display: block;
+  font-size: 0.8rem;
+  color: #9aa0b8;
+  margin-bottom: 6px;
+}
+input:not([type="checkbox"]):not([type="radio"]),
+textarea,
+select {
+  width: 100%;
+  max-width: 100%;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #3a3a60;
+  background: #0f0f1a;
+  color: #e8e8f0;
+  font-size: 0.9rem;
+  min-height: 44px;
+}
+textarea { min-height: 120px; resize: vertical; }
+.veil-app input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  max-width: 16px;
+  margin: 2px 0 0;
+  padding: 0;
+  flex: 0 0 16px;
+  accent-color: #5b6cff;
+}
+.veil-check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.veil-check-row .veil-check-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.88rem;
+  line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.secret-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+.veil-bind-banner {
+  background: #1f2a44;
+  border: 1px solid #3a4a70;
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+.veil-bind-banner.warn {
+  background: #3a2a1f;
+  border-color: #6a5030;
+  color: #f0d69e;
+}
+.veil-session-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  background: #1a2030;
+  border-radius: 8px;
+  border: 1px solid #2e3a55;
+}
+.veil-session-bar .veil-select {
+  min-width: 200px;
+  max-width: 100%;
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #3a4a70;
+  background: #12182a;
+  color: #e8eaf0;
+}
+.veil-label {
+  display: block;
+  font-size: 0.78rem;
+  color: #9aa3c4;
+  margin: 8px 0 4px;
+}
+.veil-input,
+.veil-select,
+.veil-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #3a4a70;
+  background: #12182a;
+  color: #e8eaf0;
+  font-size: 0.88rem;
+}
+.veil-textarea {
+  min-height: 64px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.4;
+}
+.veil-textarea-sm {
+  min-height: 48px;
+}
+.veil-secret-editor {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #2e3a55;
+}
+.veil-secret-details summary {
+  cursor: pointer;
+  font-size: 0.88rem;
+  color: #b8c4e8;
+}
+.veil-sidecar-gate {
+  border-color: #6a5030;
+  background: #2a2218;
+  margin-bottom: 12px;
+}
+.veil-code {
+  display: block;
+  padding: 10px 12px;
+  margin: 8px 0;
+  border-radius: 6px;
+  background: #0e1220;
+  border: 1px solid #2e3a55;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+.veil-app ol {
+  margin: 8px 0 0;
+  padding-left: 1.25rem;
+  font-size: 0.88rem;
+  color: #b8bdd6;
+  line-height: 1.5;
+}
+.veil-app ol li { margin-bottom: 4px; }
+.veil-input-ok {
+  border-color: #3ecf8e !important;
+  box-shadow: 0 0 0 1px rgba(62, 207, 142, 0.35);
+}
+.veil-vertex-block textarea {
+  min-height: 140px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+.veil-tabs {
+  flex-wrap: wrap;
+}
+.card .row {
+  align-items: center;
+}
+.card p, .card summary {
+  margin: 6px 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.result {
+  background: #0f0f1a;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  margin-top: 12px;
+}
+.result.safe { border-left: 4px solid #3ecf8e; }
+.result.unsafe { border-left: 4px solid #ff6b6b; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.details {
+  margin-top: 10px;
+  font-size: 0.85rem;
+  color: #b8bdd6;
+}
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+`;
+
+  // shared/ui/labels.js
+  var STAGE_LABELS_KO = {
+    sealed: "\uBD09\uC778",
+    foreshadow: "\uBCF5\uC120",
+    hint: "\uC554\uC2DC",
+    partial: "\uBD80\uBD84 \uACF5\uAC1C",
+    near_reveal: "\uAC70\uC758 \uACF5\uAC1C",
+    revealed: "\uC644\uC804 \uACF5\uAC1C"
+  };
+  var SOURCE_LABELS_KO = {
+    pluginStorage: "\uB85C\uCEEC \uC800\uC7A5",
+    sidecar: "\uC0AC\uC774\uB4DC\uCE74 \uC800\uC7A5",
+    cache: "\uC624\uD504\uB77C\uC778(\uB85C\uCEEC \uCE90\uC2DC)",
+    sample: "\uC0D8\uD50C \uB370\uC774\uD130",
+    unavailable: "sidecar \uB300\uAE30"
+  };
+  function stageLabelKo(stage) {
+    return STAGE_LABELS_KO[stage] || stage;
+  }
+  function sourceLabelKo(source) {
+    return SOURCE_LABELS_KO[source] || source;
+  }
+  function formatViolation(v) {
+    return `[${v.secret_id}] ${v.reason}`;
+  }
+  function riskLabelKo(level) {
+    const map = {
+      none: "\uC548\uC804",
+      low: "\uB0AE\uC74C",
+      medium: "\uBCF4\uD1B5",
+      high: "\uB192\uC74C",
+      critical: "\uC704\uD5D8"
+    };
+    return map[level] || level;
+  }
 
   // shared/text.js
   function normalizeText(value) {
@@ -767,21 +1031,6 @@
       secret_id: secret.id,
       new_stage: newStage,
       reason: options.reason || "manual advancement"
-    };
-  }
-  function listActiveSecrets(secrets, context = {}) {
-    const debug = (context && context.mode) === "debug";
-    return {
-      secrets: secrets.map((secret) => ({
-        secret_id: secret.id,
-        title: secret.revealStage === "sealed" && !debug ? "[sealed]" : secret.title,
-        scopeType: secret.scopeType,
-        scopeId: secret.scopeId,
-        revealStage: secret.revealStage,
-        tags: secret.tags || [],
-        visibilityMode: secret.visibilityMode,
-        updatedAt: secret.updatedAt
-      }))
     };
   }
 
@@ -1311,8 +1560,8 @@ Korean titles preferred if source is Korean.`;
   function getProvider(id) {
     return LLM_PROVIDERS[id] || LLM_PROVIDERS.custom;
   }
-  function buildVertexOpenAiBaseUrl(projectId, location = "us-central1") {
-    const loc = location || "us-central1";
+  function buildVertexOpenAiBaseUrl(projectId, location2 = "us-central1") {
+    const loc = location2 || "us-central1";
     const proj = projectId || "{project}";
     return `https://${loc}-aiplatform.googleapis.com/v1beta1/projects/${proj}/locations/${loc}/endpoints/openapi`;
   }
@@ -1628,10 +1877,7 @@ Korean titles preferred if source is Korean.`;
     };
   }
 
-  // shared/mcp/handlers.js
-  function jsonResult(value) {
-    return [{ type: "text", text: JSON.stringify(value, null, 2) }];
-  }
+  // shared/veil-service.js
   function mergeDisclosureResults(liteResult, sidecarData) {
     if (!sidecarData || !sidecarData.violations) return liteResult;
     const merged = [...liteResult.violations, ...sidecarData.violations];
@@ -1666,398 +1912,96 @@ Korean titles preferred if source is Korean.`;
       chat: binding?.chatLabel
     };
   }
-  function createFullToolHandler(secrets, store, resolveSidecarUrl, Risuai) {
-    return async function handleFullTool(toolName, content) {
-      const ctx = content || {};
-      const { scoped, context, bindKey, binding, bindResult } = await resolveScopedSecrets(Risuai, secrets, ctx);
-      const meta = bindingMeta(binding, bindKey, bindResult);
+  async function checkDisclosureLite(Risuai, secrets, ctx, resolveSidecarUrl) {
+    const { scoped, context, bindKey, binding, bindResult } = await resolveScopedSecrets(Risuai, secrets, ctx);
+    const meta = bindingMeta(binding, bindKey, bindResult);
+    const liteResult = checkDisclosure(ctx.draft_text || "", context, scoped);
+    if (resolveSidecarUrl) {
       const sidecarUrl = await resolveSidecarUrl(context);
-      switch (toolName) {
-        case "get_reveal_guidance":
-          return jsonResult({
-            ...makeGuidance(ctx.user_input || "", context, scoped),
-            ...meta
-          });
-        case "check_disclosure": {
-          const liteResult = checkDisclosure(
-            ctx.draft_text || "",
+      if (sidecarUrl) {
+        const sidecar = await requestSemanticCheck(
+          {
+            draft_text: ctx.draft_text || "",
             context,
-            scoped
-          );
-          const sidecar = await requestSemanticCheck(
-            {
-              draft_text: ctx.draft_text || "",
-              context,
-              lite_result: liteResult
-            },
-            sidecarUrl
-          );
-          if (sidecar.ok && sidecar.data) {
-            return jsonResult({
-              ...mergeDisclosureResults(liteResult, sidecar.data),
-              ...meta
-            });
-          }
-          return jsonResult({ ...liteResult, sidecar_assisted: false, ...meta });
+            lite_result: liteResult
+          },
+          sidecarUrl
+        );
+        if (sidecar.ok && sidecar.data) {
+          return { ...mergeDisclosureResults(liteResult, sidecar.data), ...meta };
         }
-        case "redact_to_allowed_stage": {
-          const liteRedaction = redactToAllowedStage(
-            ctx.draft_text || "",
-            ctx.target_stage || "hint",
-            scoped
-          );
-          const sidecar = await requestRewrite(
-            {
-              draft_text: ctx.draft_text || "",
-              target_stage: ctx.target_stage || "hint",
-              lite_result: liteRedaction
-            },
-            sidecarUrl
-          );
-          if (sidecar.ok && sidecar.data && sidecar.data.redacted_text) {
-            return jsonResult({
-              ...liteRedaction,
-              redacted_text: sidecar.data.redacted_text,
-              explanation: sidecar.data.explanation || liteRedaction.explanation,
-              remaining_risk: sidecar.data.remaining_risk || liteRedaction.remaining_risk,
-              sidecar_assisted: true,
-              ...meta
-            });
-          }
-          return jsonResult({ ...liteRedaction, sidecar_assisted: false, ...meta });
-        }
-        case "advance_reveal_stage": {
-          if (binding && !secretMatchesBinding(
-            secrets.find((s) => s.id === ctx.secret_id) || {},
-            binding
-          )) {
-            return jsonResult({
-              ok: false,
-              error: "\uD604\uC7AC \uCC44\uD305\uC5D0 \uBC14\uC778\uB529\uB41C \uC2DC\uD06C\uB9BF\uC774 \uC544\uB2D9\uB2C8\uB2E4.",
-              ...meta
-            });
-          }
-          const result = advanceRevealStage(
-            secrets,
-            ctx.secret_id,
-            ctx.new_stage,
-            { manual: ctx.manual, reason: ctx.reason }
-          );
-          if (result.ok) await store.save(secrets);
-          return jsonResult({ ...result, ...meta });
-        }
-        case "list_active_secrets":
-          return jsonResult({ ...listActiveSecrets(scoped, context), ...meta });
-        case "check_sidecar_status":
-          return jsonResult({ ...await checkSidecarHealth(sidecarUrl), ...meta });
-        default:
-          return [{ type: "text", text: "Unknown VEIL Full tool: " + toolName }];
       }
-    };
+    }
+    return { ...liteResult, sidecar_assisted: false, ...meta };
+  }
+  async function checkDisclosureFull(Risuai, secrets, ctx, sidecarUrl) {
+    const { scoped, context, bindKey, binding, bindResult } = await resolveScopedSecrets(Risuai, secrets, ctx);
+    const meta = bindingMeta(binding, bindKey, bindResult);
+    const liteResult = checkDisclosure(ctx.draft_text || "", context, scoped);
+    const sidecar = await requestSemanticCheck(
+      {
+        draft_text: ctx.draft_text || "",
+        context,
+        lite_result: liteResult
+      },
+      sidecarUrl
+    );
+    if (sidecar.ok && sidecar.data) {
+      return { ...mergeDisclosureResults(liteResult, sidecar.data), ...meta };
+    }
+    return { ...liteResult, sidecar_assisted: false, ...meta };
+  }
+  async function redactDraft(Risuai, secrets, ctx, sidecarUrl, { useSidecar = true } = {}) {
+    const { scoped, context, bindKey, binding, bindResult } = await resolveScopedSecrets(Risuai, secrets, ctx);
+    const meta = bindingMeta(binding, bindKey, bindResult);
+    const liteRedaction = redactToAllowedStage(
+      ctx.draft_text || "",
+      ctx.target_stage || "hint",
+      scoped
+    );
+    if (!useSidecar || !sidecarUrl) {
+      return { ...liteRedaction, sidecar_assisted: false, ...meta };
+    }
+    const sidecar = await requestRewrite(
+      {
+        draft_text: ctx.draft_text || "",
+        target_stage: ctx.target_stage || "hint",
+        lite_result: liteRedaction
+      },
+      sidecarUrl
+    );
+    if (sidecar.ok && sidecar.data?.redacted_text) {
+      return {
+        ...liteRedaction,
+        redacted_text: sidecar.data.redacted_text,
+        explanation: sidecar.data.explanation || liteRedaction.explanation,
+        remaining_risk: sidecar.data.remaining_risk || liteRedaction.remaining_risk,
+        sidecar_assisted: true,
+        ...meta
+      };
+    }
+    return { ...liteRedaction, sidecar_assisted: false, ...meta };
   }
 
-  // shared/ui/icons.js
-  var VEIL_BUTTON_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>`;
+  // shared/ui/prompt-snippet.js
+  var VEIL_PROMPT_SNIPPET_KO = `\uC228\uACA8\uC9C4 \uB3D9\uAE30, \uBBF8\uACF5\uAC1C \uACFC\uAC70\uC0AC, \uD398\uB974\uC18C\uB098 \uBE44\uBC00, \uBBF8\uB798 \uBC18\uC804, OOC/\uBE44\uACF5\uAC1C \uBA54\uBAA8, \uD604\uC7AC \uD654\uC790\uAC00 \uC54C \uC218 \uC5C6\uB294 \uC815\uBCF4\uB97C \uB4DC\uB7EC\uB0B4\uAE30 \uC804\uC5D0, RisuAI \uBA54\uB274\uC5D0\uC11C VEIL \uB300\uC2DC\uBCF4\uB4DC\uB97C \uC5F4\uACE0 \u300C\uAC00\uC774\uB4DC\u300D\u300C\uAC80\uC0AC\u300D \uD0ED\uC73C\uB85C \uD5C8\uC6A9 \uB2E8\uACC4\uB97C \uD655\uC778\uD55C\uB2E4.
 
-  // shared/ui/styles.js
-  var DASHBOARD_CSS = `
-:root {
-  color-scheme: dark;
-  font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  background: #12121f;
-  color: #e8e8f0;
-  min-height: 100vh;
-}
-.veil-app {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 16px;
-}
-.veil-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-.veil-title { font-size: 1.25rem; font-weight: 700; margin: 0; }
-.veil-sub { font-size: 0.85rem; color: #9aa0b8; margin: 4px 0 0; }
-.veil-chips { display: flex; gap: 8px; flex-wrap: wrap; }
-.chip-version {
-  border-color: #5a8fd4;
-  background: #1a2840;
-  color: #b8d4ff;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.chip {
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 0.75rem;
-  background: #2a2a44;
-}
-.chip.ok { background: #1f4d3a; color: #9ef0c5; }
-.chip.warn { background: #4d3a1f; color: #f0d69e; }
-.chip.off { background: #3a2a2a; color: #f0a0a0; }
-.veil-tabs {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-  border-bottom: 1px solid #2e2e48;
-  padding-bottom: 8px;
-}
-.veil-tab {
-  background: transparent;
-  border: none;
-  color: #9aa0b8;
-  padding: 10px 14px;
-  min-height: 44px;
-  cursor: pointer;
-  border-radius: 8px;
-  font-size: 0.95rem;
-}
-.veil-tab.active {
-  color: #fff;
-  background: #2d2d50;
-}
-.veil-panel { display: none; }
-.veil-panel.active { display: block; }
-.btn {
-  min-height: 44px;
-  padding: 10px 16px;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 0.9rem;
-}
-.btn-primary { background: #5b6cff; color: #fff; }
-.btn-secondary { background: #2a2a44; color: #e8e8f0; }
-.btn-danger { background: #5c2a2a; color: #ffc9c9; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.card {
-  background: #1a1a2e;
-  border: 1px solid #2e2e48;
-  border-radius: 12px;
-  padding: 14px;
-  margin-bottom: 12px;
-}
-.card h3 { margin: 0 0 8px; font-size: 1rem; }
-.badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 0.75rem;
-  background: #3a3a60;
-  margin-right: 6px;
-}
-.field { margin-bottom: 12px; }
-.field label {
-  display: block;
-  font-size: 0.8rem;
-  color: #9aa0b8;
-  margin-bottom: 6px;
-}
-input:not([type="checkbox"]):not([type="radio"]),
-textarea,
-select {
-  width: 100%;
-  max-width: 100%;
-  padding: 10px;
-  border-radius: 8px;
-  border: 1px solid #3a3a60;
-  background: #0f0f1a;
-  color: #e8e8f0;
-  font-size: 0.9rem;
-  min-height: 44px;
-}
-textarea { min-height: 120px; resize: vertical; }
-.veil-app input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  min-height: 16px;
-  max-width: 16px;
-  margin: 2px 0 0;
-  padding: 0;
-  flex: 0 0 16px;
-  accent-color: #5b6cff;
-}
-.veil-check-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-.veil-check-row .veil-check-label {
-  flex: 1;
-  min-width: 0;
-  font-size: 0.88rem;
-  line-height: 1.4;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-.secret-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 12px 0;
-}
-.veil-bind-banner {
-  background: #1f2a44;
-  border: 1px solid #3a4a70;
-  border-radius: 10px;
-  padding: 10px 14px;
-  margin-bottom: 12px;
-  font-size: 0.88rem;
-  line-height: 1.45;
-}
-.veil-bind-banner.warn {
-  background: #3a2a1f;
-  border-color: #6a5030;
-  color: #f0d69e;
-}
-.veil-session-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  padding: 10px 12px;
-  background: #1a2030;
-  border-radius: 8px;
-  border: 1px solid #2e3a55;
-}
-.veil-session-bar .veil-select {
-  min-width: 200px;
-  max-width: 100%;
-  flex: 1;
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: 1px solid #3a4a70;
-  background: #12182a;
-  color: #e8eaf0;
-}
-.veil-label {
-  display: block;
-  font-size: 0.78rem;
-  color: #9aa3c4;
-  margin: 8px 0 4px;
-}
-.veil-input,
-.veil-select,
-.veil-textarea {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid #3a4a70;
-  background: #12182a;
-  color: #e8eaf0;
-  font-size: 0.88rem;
-}
-.veil-textarea {
-  min-height: 64px;
-  resize: vertical;
-  font-family: inherit;
-  line-height: 1.4;
-}
-.veil-textarea-sm {
-  min-height: 48px;
-}
-.veil-secret-editor {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid #2e3a55;
-}
-.veil-secret-details summary {
-  cursor: pointer;
-  font-size: 0.88rem;
-  color: #b8c4e8;
-}
-.veil-app ol {
-  margin: 8px 0 0;
-  padding-left: 1.25rem;
-  font-size: 0.88rem;
-  color: #b8bdd6;
-  line-height: 1.5;
-}
-.veil-app ol li { margin-bottom: 4px; }
-.veil-input-ok {
-  border-color: #3ecf8e !important;
-  box-shadow: 0 0 0 1px rgba(62, 207, 142, 0.35);
-}
-.veil-vertex-block textarea {
-  min-height: 140px;
-  font-family: ui-monospace, monospace;
-  font-size: 0.8rem;
-}
-.veil-tabs {
-  flex-wrap: wrap;
-}
-.card .row {
-  align-items: center;
-}
-.card p, .card summary {
-  margin: 6px 0;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-.result {
-  background: #0f0f1a;
-  border-radius: 8px;
-  padding: 12px;
-  font-size: 0.85rem;
-  white-space: pre-wrap;
-  margin-top: 12px;
-}
-.result.safe { border-left: 4px solid #3ecf8e; }
-.result.unsafe { border-left: 4px solid #ff6b6b; }
-.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.details {
-  margin-top: 10px;
-  font-size: 0.85rem;
-  color: #b8bdd6;
-}
-.toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-`;
+VEIL \uAC80\uC0AC \uACB0\uACFC\uAC00 unsafe\uC774\uBA74 \uD574\uB2F9 \uCD08\uC548\uC744 \uADF8\uB300\uB85C \uCD9C\uB825\uD558\uC9C0 \uC54A\uACE0, \uD5C8\uC6A9\uB41C \uACF5\uAC1C \uB2E8\uACC4\uC5D0 \uB9DE\uAC8C \uC218\uC815\uD55C\uB2E4.
 
-  // shared/ui/labels.js
-  var STAGE_LABELS_KO = {
-    sealed: "\uBD09\uC778",
-    foreshadow: "\uBCF5\uC120",
-    hint: "\uC554\uC2DC",
-    partial: "\uBD80\uBD84 \uACF5\uAC1C",
-    near_reveal: "\uAC70\uC758 \uACF5\uAC1C",
-    revealed: "\uC644\uC804 \uACF5\uAC1C"
-  };
-  var SOURCE_LABELS_KO = {
-    pluginStorage: "\uB85C\uCEEC \uC800\uC7A5",
-    sidecar: "\uC0AC\uC774\uB4DC\uCE74 \uC800\uC7A5",
-    cache: "\uC624\uD504\uB77C\uC778(\uB85C\uCEEC \uCE90\uC2DC)",
-    sample: "\uC0D8\uD50C \uB370\uC774\uD130"
-  };
-  function stageLabelKo(stage) {
-    return STAGE_LABELS_KO[stage] || stage;
+\uBE44\uBC00\uC740 \uC601\uAD6C\uD788 \uC228\uAE30\uB294 \uAC83\uC774 \uC544\uB2C8\uB77C, \uC554\uC2DC \u2192 \uB2E8\uC11C \u2192 \uBD80\uBD84 \uACF5\uAC1C \u2192 \uC644\uC804 \uACF5\uAC1C\uC758 \uB2E8\uACC4\uC5D0 \uB9DE\uCDB0 \uB4DC\uB7EC\uB0B8\uB2E4.`;
+  var VEIL_PROMPT_SNIPPET_EN = `Before revealing hidden motives, unrevealed backstory, persona-private facts, plot twists, or OOC notes, open the VEIL dashboard in RisuAI and use the Guide and Check tabs for the allowed reveal stage.
+
+If VEIL Check reports unsafe, revise the draft to match the allowed stage instead of outputting the unsafe text.
+
+Secrets should be foreshadowed, hinted, partially revealed, and fully revealed only when the narrative stage allows.`;
+  function getPromptSnippet(lang = "ko") {
+    return lang === "en" ? VEIL_PROMPT_SNIPPET_EN : VEIL_PROMPT_SNIPPET_KO;
   }
-  function sourceLabelKo(source) {
-    return SOURCE_LABELS_KO[source] || source;
-  }
-  function formatViolation(v) {
-    return `[${v.secret_id}] ${v.reason}`;
-  }
-  function riskLabelKo(level) {
-    const map = {
-      none: "\uC548\uC804",
-      low: "\uB0AE\uC74C",
-      medium: "\uBCF4\uD1B5",
-      high: "\uB192\uC74C",
-      critical: "\uC704\uD5D8"
-    };
-    return map[level] || level;
-  }
+
+  // shared/plugin-meta.js
+  var VEIL_VERSION = "0.1.0-beta";
+  var VEIL_DISPLAY_VERSION = "v0.1.0-beta";
+  var VEIL_RELEASE_TAG = "v0.1.0-beta";
 
   // shared/ui/db-actors.js
   async function loadDbActors(Risuai) {
@@ -3269,9 +3213,6 @@ textarea { min-height: 120px; resize: vertical; }
     card.appendChild(details);
   }
 
-  // shared/plugin-meta.js
-  var VEIL_DISPLAY_VERSION = "v0.1.0-beta";
-
   // shared/ui/dashboard.js
   function el4(tag, attrs = {}, children = []) {
     const node = document.createElement(tag);
@@ -3310,9 +3251,23 @@ textarea { min-height: 120px; resize: vertical; }
     let pluginOptions = initialPluginOptions || {};
     let activeTab = "secrets";
     let status = store.getStatus();
+    if (edition === "full" && store.refreshHealth) {
+      await store.refreshHealth();
+      status = store.getStatus();
+    }
     const bindResult = await resolveChatBindingSafe(Risuai);
     const binding = bindResult.binding;
-    if (binding) {
+    const fullBlocked = edition === "full" && (!status.sidecarOnline || status.readOnly);
+    function guardWrite() {
+      if (fullBlocked) {
+        alert(
+          status.error || "VEIL Full\uC740 sidecar\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4. sidecar\uB97C \uC2E4\uD589\uD55C \uB4A4 \uB2E4\uC2DC \uC5EC\uC138\uC694."
+        );
+        return false;
+      }
+      return true;
+    }
+    if (binding && !fullBlocked) {
       const migrated = migrateUnboundSecretsToBinding(secrets, binding);
       if (migrated > 0) await store.save(secrets);
     }
@@ -3350,10 +3305,6 @@ textarea { min-height: 120px; resize: vertical; }
       if (!bindResult.ok || !view?.bindKey) return [];
       return filterSecretsForBinding(secrets, view);
     }
-    if (edition === "full" && store.refreshHealth) {
-      await store.refreshHealth();
-      status = store.getStatus();
-    }
     const root = doc.createElement("div");
     root.className = "veil-app";
     doc.body.innerHTML = "";
@@ -3364,7 +3315,7 @@ textarea { min-height: 120px; resize: vertical; }
       el4("h1", { className: "veil-title", text: "VEIL \u2014 \uBE44\uBC00 \uACF5\uAC1C \uAD00\uB9AC" }),
       el4("p", {
         className: "veil-sub",
-        text: "\uB2E8\uACC4\uC5D0 \uB9DE\uAC8C \uBE44\uBC00\uC744 \uC554\uC2DC\uD558\uACE0, \uC2A4\uD3EC\uC77C\uB7EC\uB97C \uB9C9\uC2B5\uB2C8\uB2E4."
+        text: edition === "full" ? "Full \xB7 sidecar \uD544\uC218 \u2014 \uB300\uC2DC\uBCF4\uB4DC GUI (MCP \uBBF8\uC0AC\uC6A9)" : "Lite \xB7 \uB85C\uCEEC \uC800\uC7A5 \u2014 \uB300\uC2DC\uBCF4\uB4DC GUI (MCP \uBBF8\uC0AC\uC6A9)"
       })
     ]);
     const chips = el4("div", { className: "veil-chips" });
@@ -3378,7 +3329,7 @@ textarea { min-height: 120px; resize: vertical; }
     chips.appendChild(
       el4("span", {
         className: "chip",
-        text: edition === "full" ? "Full" : "Lite"
+        text: edition === "full" ? "Full \xB7 sidecar" : "Lite \xB7 local"
       })
     );
     const storageChip = el4("span", {
@@ -3410,6 +3361,45 @@ textarea { min-height: 120px; resize: vertical; }
       text: bindingBannerText(bindResult)
     });
     root.appendChild(bindBanner);
+    if (fullBlocked) {
+      const gate = el4("div", { className: "card veil-sidecar-gate" });
+      gate.appendChild(el4("h3", { text: "Sidecar \uC5F0\uACB0 \uD544\uC694" }));
+      gate.appendChild(
+        el4("p", {
+          text: "VEIL Full\uC740 HTTP sidecar \uC5C6\uC774 \uB3D9\uC791\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uC544\uB798 \uC21C\uC11C\uB85C sidecar\uB97C \uC2E4\uD589\uD55C \uB4A4 VEIL\uC744 \uB2E4\uC2DC \uC5EC\uC138\uC694."
+        })
+      );
+      gate.appendChild(
+        el4("pre", {
+          className: "veil-code",
+          text: `docker pull ghcr.io/sallos725/veil-sidecar:${VEIL_RELEASE_TAG}
+cd full
+docker compose -f docker-compose.release.yml up -d
+curl http://127.0.0.1:6010/health`
+        })
+      );
+      gate.appendChild(
+        el4("p", {
+          className: "veil-sub",
+          text: "\uD50C\uB7EC\uADF8\uC778\uB9CC\uC73C\uB85C RP\uD558\uB294 Lite\uAC00 \uD544\uC694\uD558\uBA74 veil-lite.js\uB97C \uC0AC\uC6A9\uD558\uC138\uC694."
+        })
+      );
+      gate.appendChild(
+        el4("button", {
+          className: "btn btn-primary",
+          text: "\uC5F0\uACB0 \uB2E4\uC2DC \uD655\uC778",
+          onclick: async () => {
+            if (store.refreshHealth) {
+              await store.refreshHealth();
+              status = store.getStatus();
+              if (status.sidecarOnline) location.reload();
+              else alert("\uC544\uC9C1 sidecar\uC5D0 \uC5F0\uACB0\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+            }
+          }
+        })
+      );
+      root.appendChild(gate);
+    }
     if (!bindResult.ok) {
       const guideCard = el4("div", { className: "card" });
       guideCard.appendChild(
@@ -3441,12 +3431,24 @@ textarea { min-height: 120px; resize: vertical; }
     }
     const tabs = el4("div", { className: "veil-tabs" });
     const panels = {};
-    const tabNames = [
+    const tabNames = fullBlocked ? [
+      ["secrets", "\uC2DC\uD06C\uB9BF"],
+      ["help", "\uC548\uB0B4"]
+    ] : edition === "full" ? [
+      ["secrets", "\uC2DC\uD06C\uB9BF"],
+      ["check", "\uAC80\uC0AC"],
+      ["redact", "\uC218\uC815"],
+      ["guide", "\uAC00\uC774\uB4DC"],
+      ["scan", "\uC2A4\uCE94"],
+      ["settings", "LLM \uC124\uC815"],
+      ["help", "\uC548\uB0B4"]
+    ] : [
       ["secrets", "\uC2DC\uD06C\uB9BF"],
       ["check", "\uAC80\uC0AC"],
       ["guide", "\uAC00\uC774\uB4DC"],
       ["scan", "\uC2A4\uCE94"],
-      ["settings", "LLM \uC124\uC815"]
+      ["settings", "LLM \uC124\uC815"],
+      ["help", "\uC548\uB0B4"]
     ];
     function setTab(name) {
       activeTab = name;
@@ -3500,6 +3502,7 @@ textarea { min-height: 120px; resize: vertical; }
           className: "btn btn-secondary",
           text: "\uC774 \uC138\uC158 \uB370\uC774\uD130 \uC804\uCCB4 \uC0AD\uC81C",
           onclick: async () => {
+            if (!guardWrite()) return;
             const view = resolveViewBinding();
             const n = filterSecretsForBinding(secrets, view).length;
             if (!n || !confirm(
@@ -3524,6 +3527,7 @@ textarea { min-height: 120px; resize: vertical; }
             className: "btn btn-secondary",
             text: `cid \uD0A4\uB85C \uBCC0\uD658 (${migratable}\uAC1C)`,
             onclick: async () => {
+              if (!guardWrite()) return;
               if (!confirm(
                 `\uC778\uB371\uC2A4 \uD0A4(0:1 \uD615\uC2DD)\uB85C \uBB36\uC778 \uC2DC\uD06C\uB9BF ${migratable}\uAC1C\uB97C Risu chat.id \uAE30\uC900 cid \uD0A4\uB85C \uBC14\uAFC0\uAE4C\uC694?`
               )) {
@@ -3581,26 +3585,28 @@ textarea { min-height: 120px; resize: vertical; }
         }
       })
     );
-    secretsToolbar.appendChild(
-      el4("button", {
-        className: "btn btn-secondary",
-        text: "\uC774 \uC138\uC158 \uAC00\uC838\uC624\uAE30",
-        onclick: () => {
-          if (!resolveViewBinding()) {
-            alert("\uCC44\uD305\uC774 \uC5F0\uACB0\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
-            return;
+    if (!fullBlocked) {
+      secretsToolbar.appendChild(
+        el4("button", {
+          className: "btn btn-secondary",
+          text: "\uC774 \uC138\uC158 \uAC00\uC838\uC624\uAE30",
+          onclick: () => {
+            if (!resolveViewBinding()) {
+              alert("\uCC44\uD305\uC774 \uC5F0\uACB0\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
+              return;
+            }
+            sessionImportInput.click();
           }
-          sessionImportInput.click();
-        }
-      })
-    );
-    secretsToolbar.appendChild(
-      el4("button", {
-        className: "btn btn-secondary",
-        text: "\uC804\uCCB4 JSON \uAC00\uC838\uC624\uAE30",
-        onclick: () => importInput.click()
-      })
-    );
+        })
+      );
+      secretsToolbar.appendChild(
+        el4("button", {
+          className: "btn btn-secondary",
+          text: "\uC804\uCCB4 JSON \uAC00\uC838\uC624\uAE30",
+          onclick: () => importInput.click()
+        })
+      );
+    }
     secretsToolbar.appendChild(
       el4("button", {
         className: "btn btn-secondary",
@@ -3618,29 +3624,41 @@ textarea { min-height: 120px; resize: vertical; }
         }
       })
     );
-    secretsToolbar.appendChild(
-      el4("button", {
-        className: "btn btn-primary",
-        text: "\uC800\uC7A5",
-        onclick: async () => {
-          const result = await store.save(secrets);
-          status = store.getStatus();
-          storageChip.textContent = `\uC800\uC7A5: ${sourceLabelKo(status.source)}`;
-          if (sidecarChip) {
-            sidecarChip.className = `chip ${status.sidecarOnline ? "ok" : "off"}`;
-            sidecarChip.textContent = status.sidecarOnline ? "\uC0AC\uC774\uB4DC\uCE74 \uC5F0\uACB0\uB428" : "\uC0AC\uC774\uB4DC\uCE74 \uC624\uD504\uB77C\uC778";
+    if (!fullBlocked) {
+      secretsToolbar.appendChild(
+        el4("button", {
+          className: "btn btn-primary",
+          text: "\uC800\uC7A5",
+          onclick: async () => {
+            if (!guardWrite()) return;
+            const result = await store.save(secrets);
+            status = store.getStatus();
+            storageChip.textContent = `\uC800\uC7A5: ${sourceLabelKo(status.source)}`;
+            if (sidecarChip) {
+              sidecarChip.className = `chip ${status.sidecarOnline ? "ok" : "off"}`;
+              sidecarChip.textContent = status.sidecarOnline ? "\uC0AC\uC774\uB4DC\uCE74 \uC5F0\uACB0\uB428" : "\uC0AC\uC774\uB4DC\uCE74 \uC624\uD504\uB77C\uC778";
+            }
+            alert(
+              result.sidecarSynced === false && edition === "full" ? "\uB85C\uCEEC \uCE90\uC2DC\uC5D0 \uC800\uC7A5\uB428 (\uC0AC\uC774\uB4DC\uCE74 \uB3D9\uAE30\uD654 \uC2E4\uD328)" : "\uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4."
+            );
           }
-          alert(
-            result.sidecarSynced === false && edition === "full" ? "\uB85C\uCEEC \uCE90\uC2DC\uC5D0 \uC800\uC7A5\uB428 (\uC0AC\uC774\uB4DC\uCE74 \uB3D9\uAE30\uD654 \uC2E4\uD328)" : "\uC800\uC7A5\uB418\uC5C8\uC2B5\uB2C8\uB2E4."
-          );
-        }
-      })
-    );
+        })
+      );
+    }
+    if (fullBlocked) {
+      secretsToolbar.appendChild(
+        el4("p", {
+          className: "veil-sub",
+          text: "\uC77D\uAE30 \uC804\uC6A9 \u2014 sidecar \uC5F0\uACB0 \uD6C4 \uD3B8\uC9D1\xB7\uC800\uC7A5\uC774 \uAC00\uB2A5\uD569\uB2C8\uB2E4."
+        })
+      );
+    }
     if (sessionBar.childNodes.length) panels.secrets.appendChild(sessionBar);
     panels.secrets.appendChild(secretsToolbar);
     panels.secrets.appendChild(importInput);
     panels.secrets.appendChild(sessionImportInput);
     sessionImportInput.addEventListener("change", async () => {
+      if (!guardWrite()) return;
       const file = sessionImportInput.files && sessionImportInput.files[0];
       if (!file) return;
       const view = resolveViewBinding();
@@ -3676,6 +3694,7 @@ textarea { min-height: 120px; resize: vertical; }
       sessionImportInput.value = "";
     });
     importInput.addEventListener("change", async () => {
+      if (!guardWrite()) return;
       const file = importInput.files && importInput.files[0];
       if (!file) return;
       try {
@@ -3786,6 +3805,7 @@ textarea { min-height: 120px; resize: vertical; }
               className: "btn btn-primary",
               text: `\uB2E4\uC74C \uB2E8\uACC4 (${stageLabelKo(ns)})`,
               onclick: async () => {
+                if (!guardWrite()) return;
                 const result = advanceRevealStage(secrets, secret.id, ns, {
                   manual: true,
                   reason: "gui"
@@ -3824,6 +3844,7 @@ textarea { min-height: 120px; resize: vertical; }
         card.appendChild(details);
         attachSecretEditorToCard(card, doc, secret, {
           onSave: async (updated) => {
+            if (!guardWrite()) return;
             const idx = secrets.findIndex((s) => s.id === secret.id);
             if (idx < 0) return;
             secrets[idx] = updated;
@@ -3840,7 +3861,6 @@ textarea { min-height: 120px; resize: vertical; }
       className: "veil-sub",
       text: dbActors.ok ? `DB\uC5D0\uC11C ${dbActors.actors.length}\uBA85\uC758 \uD654\uC790/\uD398\uB974\uC18C\uB098\uB97C \uBD88\uB7EC\uC654\uC2B5\uB2C8\uB2E4.` : dbActors.error || ""
     });
-    const draftField = el4("textarea", { placeholder: "\uAC80\uC0AC\uD560 \uCD08\uC548 \uD14D\uC2A4\uD2B8\uB97C \uC785\uB825\uD558\uC138\uC694." });
     const speakerField = dbActors.ok ? el4("select", {}) : el4("input", { placeholder: "\uD654\uC790 ID (\uC120\uD0DD)" });
     const personaField = dbActors.ok ? el4("select", {}) : el4("input", { placeholder: "\uD398\uB974\uC18C\uB098 ID (\uC120\uD0DD)" });
     if (dbActors.ok) {
@@ -3869,99 +3889,229 @@ textarea { min-height: 120px; resize: vertical; }
       listeners: listenersField,
       mode: modeField
     };
-    const checkResult = el4("div", { className: "result" });
-    panels.check.appendChild(actorHint);
-    panels.check.appendChild(el4("div", { className: "field" }, [el4("label", { text: "\uCD08\uC548" }), draftField]));
-    panels.check.appendChild(
-      el4("div", { className: "field" }, [el4("label", { text: "\uD654\uC790" }), speakerField])
-    );
-    panels.check.appendChild(
-      el4("div", { className: "field" }, [el4("label", { text: "\uD398\uB974\uC18C\uB098" }), personaField])
-    );
-    panels.check.appendChild(
-      el4("div", { className: "field" }, [el4("label", { text: "\uCCAD\uC790" }), listenersField])
-    );
-    panels.check.appendChild(el4("div", { className: "field" }, [el4("label", { text: "\uBAA8\uB4DC" }), modeField]));
-    panels.check.appendChild(
-      el4("button", {
-        className: "btn btn-primary",
-        text: "\uACF5\uAC1C \uAC80\uC0AC",
-        onclick: () => {
-          const ctxCheck = buildContextFromFields(contextFields, binding);
-          const result = checkDisclosure(
-            draftField.value,
-            ctxCheck,
-            getBoundSecrets()
-          );
-          checkResult.className = `result ${result.safe ? "safe" : "unsafe"}`;
-          const lines = [
-            `\uACB0\uACFC: ${result.safe ? "\uC548\uC804" : "\uC704\uD5D8"} (${riskLabelKo(result.risk_level)})`
-          ];
-          if (result.violations.length) {
-            lines.push("", "\uC704\uBC18 \uBAA9\uB85D:");
-            for (const v of result.violations) {
-              lines.push("- " + formatViolation(v));
-              if (v.suggested_rewrite) lines.push("  \u2192 " + v.suggested_rewrite);
+    if (!fullBlocked && panels.check) {
+      const draftField = el4("textarea", { placeholder: "\uAC80\uC0AC\uD560 \uCD08\uC548 \uD14D\uC2A4\uD2B8\uB97C \uC785\uB825\uD558\uC138\uC694." });
+      const checkResult = el4("div", { className: "result" });
+      panels.check.appendChild(actorHint);
+      panels.check.appendChild(el4("div", { className: "field" }, [el4("label", { text: "\uCD08\uC548" }), draftField]));
+      panels.check.appendChild(
+        el4("div", { className: "field" }, [el4("label", { text: "\uD654\uC790" }), speakerField])
+      );
+      panels.check.appendChild(
+        el4("div", { className: "field" }, [el4("label", { text: "\uD398\uB974\uC18C\uB098" }), personaField])
+      );
+      panels.check.appendChild(
+        el4("div", { className: "field" }, [el4("label", { text: "\uCCAD\uC790" }), listenersField])
+      );
+      panels.check.appendChild(el4("div", { className: "field" }, [el4("label", { text: "\uBAA8\uB4DC" }), modeField]));
+      panels.check.appendChild(
+        el4("button", {
+          className: "btn btn-primary",
+          text: edition === "full" ? "\uACF5\uAC1C \uAC80\uC0AC (sidecar)" : "\uACF5\uAC1C \uAC80\uC0AC",
+          onclick: async () => {
+            const ctxCheck = buildContextFromFields(contextFields, binding);
+            ctxCheck.draft_text = draftField.value;
+            checkResult.textContent = "\uAC80\uC0AC \uC911\u2026";
+            checkResult.className = "result";
+            let result;
+            try {
+              if (edition === "full" && resolveSidecarUrl) {
+                const url = await resolveSidecarUrl(ctxCheck);
+                result = await checkDisclosureFull(
+                  Risuai,
+                  secrets,
+                  ctxCheck,
+                  url
+                );
+              } else {
+                result = await checkDisclosureLite(
+                  Risuai,
+                  secrets,
+                  ctxCheck,
+                  resolveSidecarUrl
+                );
+              }
+            } catch (e) {
+              checkResult.textContent = "\uAC80\uC0AC \uC624\uB958: " + (e?.message || e);
+              return;
+            }
+            checkResult.className = `result ${result.safe ? "safe" : "unsafe"}`;
+            const lines = [
+              `\uACB0\uACFC: ${result.safe ? "\uC548\uC804" : "\uC704\uD5D8"} (${riskLabelKo(result.risk_level)})`
+            ];
+            if (result.sidecar_assisted) lines.push("(sidecar semantic \uBCF4\uC870)");
+            if (result.violations?.length) {
+              lines.push("", "\uC704\uBC18 \uBAA9\uB85D:");
+              for (const v of result.violations) {
+                lines.push("- " + formatViolation(v));
+                if (v.suggested_rewrite) lines.push("  \u2192 " + v.suggested_rewrite);
+              }
+            }
+            checkResult.textContent = lines.join("\n");
+            if (!panels.check.contains(checkResult)) panels.check.appendChild(checkResult);
+          }
+        })
+      );
+      panels.check.appendChild(checkResult);
+    }
+    if (!fullBlocked && panels.guide) {
+      const inputField = el4("textarea", { placeholder: "\uC720\uC800 \uC785\uB825 \uB610\uB294 \uC7A5\uBA74 \uD0A4\uC6CC\uB4DC" });
+      const guideResult = el4("div", { className: "result" });
+      panels.guide.appendChild(
+        el4("div", { className: "field" }, [el4("label", { text: "\uC785\uB825" }), inputField])
+      );
+      panels.guide.appendChild(
+        el4("p", {
+          className: "veil-sub",
+          text: "\uAC80\uC0AC \uD0ED\uC758 \uD654\uC790\xB7\uD398\uB974\uC18C\uB098\xB7\uCCAD\uC790 \uC124\uC815\uC744 \uAC00\uC774\uB4DC\uC5D0\uB3C4 \uC0AC\uC6A9\uD569\uB2C8\uB2E4."
+        })
+      );
+      panels.guide.appendChild(
+        el4("button", {
+          className: "btn btn-primary",
+          text: "\uD78C\uD2B8 \uAC00\uC838\uC624\uAE30",
+          onclick: () => {
+            const result = makeGuidance(
+              inputField.value,
+              buildContextFromFields(contextFields, binding),
+              getBoundSecrets()
+            );
+            const lines = [result.global_guidance, ""];
+            if (!result.matched_secrets.length) {
+              lines.push("\uB9E4\uCE6D\uB41C \uC2DC\uD06C\uB9BF \uC5C6\uC74C");
+            } else {
+              for (const m of result.matched_secrets) {
+                lines.push(`\u25A0 ${m.title} [${stageLabelKo(m.allowed_stage)}]`);
+                for (const d of m.allowed_disclosures) lines.push("  - " + d);
+                if (m.blocked_reveals?.length) {
+                  lines.push("  \uAE08\uC9C0: " + m.blocked_reveals.join(", "));
+                }
+                lines.push("  " + m.rewrite_guidance);
+                lines.push("");
+              }
+            }
+            guideResult.textContent = lines.join("\n");
+            if (!panels.guide.contains(guideResult)) panels.guide.appendChild(guideResult);
+          }
+        })
+      );
+      panels.guide.appendChild(guideResult);
+    }
+    if (!fullBlocked && edition === "full" && panels.redact) {
+      const redactDraftField = el4("textarea", {
+        placeholder: "\uC218\uC815\uD560 \uCD08\uC548 \uD14D\uC2A4\uD2B8"
+      });
+      const redactStage = el4("select", {}, []);
+      for (const stage of VEIL_STAGE_ORDER) {
+        redactStage.appendChild(
+          el4("option", { value: stage, text: stageLabelKo(stage) })
+        );
+      }
+      redactStage.value = "hint";
+      const redactResult = el4("div", { className: "result" });
+      panels.redact.appendChild(
+        el4("p", {
+          className: "veil-sub",
+          text: "\uD5C8\uC6A9 \uB2E8\uACC4\uC5D0 \uB9DE\uAC8C \uCD08\uC548\uC744 \uC904\uC774\uAC70\uB098 \uBC14\uAFC9\uB2C8\uB2E4 (sidecar /rewrite \uBCF4\uC870)."
+        })
+      );
+      panels.redact.appendChild(
+        el4("div", { className: "field" }, [el4("label", { text: "\uCD08\uC548" }), redactDraftField])
+      );
+      panels.redact.appendChild(
+        el4("div", { className: "field" }, [el4("label", { text: "\uBAA9\uD45C \uB2E8\uACC4" }), redactStage])
+      );
+      panels.redact.appendChild(
+        el4("button", {
+          className: "btn btn-primary",
+          text: "\uC218\uC815 \uAC00\uC774\uB4DC \uC0DD\uC131",
+          onclick: async () => {
+            const ctxRedact = buildContextFromFields(contextFields, binding);
+            ctxRedact.draft_text = redactDraftField.value;
+            ctxRedact.target_stage = redactStage.value;
+            redactResult.textContent = "\uCC98\uB9AC \uC911\u2026";
+            try {
+              const url = resolveSidecarUrl ? await resolveSidecarUrl(ctxRedact) : "";
+              const result = await redactDraft(
+                Risuai,
+                secrets,
+                ctxRedact,
+                url,
+                { useSidecar: true }
+              );
+              const lines = [
+                result.redacted_text || "(\uD14D\uC2A4\uD2B8 \uC5C6\uC74C)",
+                "",
+                result.explanation || "",
+                `\uC794\uC5EC \uC704\uD5D8: ${riskLabelKo(result.remaining_risk || "none")}`
+              ];
+              if (result.sidecar_assisted) lines.unshift("(sidecar rewrite \uC801\uC6A9)");
+              redactResult.textContent = lines.join("\n");
+              redactResult.className = "result safe";
+            } catch (e) {
+              redactResult.textContent = "\uC624\uB958: " + (e?.message || e);
+            }
+            if (!panels.redact.contains(redactResult)) {
+              panels.redact.appendChild(redactResult);
             }
           }
-          checkResult.textContent = lines.join("\n");
-          if (!panels.check.contains(checkResult)) panels.check.appendChild(checkResult);
-        }
-      })
-    );
-    panels.check.appendChild(checkResult);
-    const inputField = el4("textarea", { placeholder: "\uC720\uC800 \uC785\uB825 \uB610\uB294 \uC7A5\uBA74 \uD0A4\uC6CC\uB4DC" });
-    const guideResult = el4("div", { className: "result" });
-    panels.guide.appendChild(
-      el4("div", { className: "field" }, [el4("label", { text: "\uC785\uB825" }), inputField])
-    );
-    panels.guide.appendChild(
+        })
+      );
+      panels.redact.appendChild(redactResult);
+    } else if (panels.redact) {
+      panels.redact.appendChild(
+        el4("p", {
+          className: "veil-sub",
+          text: edition === "full" ? "sidecar \uC5F0\uACB0 \uD6C4 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." : "VEIL Lite\uC5D0\uB294 \uC218\uC815 \uD0ED\uC774 \uC5C6\uC2B5\uB2C8\uB2E4. Full + sidecar\uB97C \uC0AC\uC6A9\uD558\uC138\uC694."
+        })
+      );
+    }
+    const snippetArea = el4("textarea", {
+      className: "veil-textarea",
+      rows: "8",
+      value: getPromptSnippet("ko")
+    });
+    snippetArea.readOnly = true;
+    panels.help.appendChild(
       el4("p", {
         className: "veil-sub",
-        text: "\uAC80\uC0AC \uD0ED\uC758 \uD654\uC790\xB7\uD398\uB974\uC18C\uB098\xB7\uCCAD\uC790 \uC124\uC815\uC744 \uAC00\uC774\uB4DC\uC5D0\uB3C4 \uC0AC\uC6A9\uD569\uB2C8\uB2E4."
+        text: "\uCE90\uB9AD\uD130 \uCE74\uB4DC\xB7\uC2DC\uC2A4\uD15C \uD504\uB86C\uD504\uD2B8\uC5D0 \uBD99\uC5EC \uB123\uC73C\uC138\uC694. VEIL\uC740 MCP \uB3C4\uAD6C\uAC00 \uC544\uB2C8\uB77C \uB300\uC2DC\uBCF4\uB4DC GUI\uB85C \uC0AC\uC6A9\uD569\uB2C8\uB2E4."
       })
     );
-    panels.guide.appendChild(
+    panels.help.appendChild(snippetArea);
+    panels.help.appendChild(
       el4("button", {
         className: "btn btn-primary",
-        text: "\uD78C\uD2B8 \uAC00\uC838\uC624\uAE30",
-        onclick: () => {
-          const result = makeGuidance(
-            inputField.value,
-            buildContextFromFields(contextFields, binding),
-            getBoundSecrets()
-          );
-          const lines = [result.global_guidance, ""];
-          if (!result.matched_secrets.length) {
-            lines.push("\uB9E4\uCE6D\uB41C \uC2DC\uD06C\uB9BF \uC5C6\uC74C");
-          } else {
-            for (const m of result.matched_secrets) {
-              lines.push(`\u25A0 ${m.title} [${stageLabelKo(m.allowed_stage)}]`);
-              for (const d of m.allowed_disclosures) lines.push("  - " + d);
-              if (m.blocked_reveals?.length) {
-                lines.push("  \uAE08\uC9C0: " + m.blocked_reveals.join(", "));
-              }
-              lines.push("  " + m.rewrite_guidance);
-              lines.push("");
-            }
+        text: "\uC2A4\uB2C8\uD3AB \uBCF5\uC0AC",
+        onclick: async () => {
+          try {
+            await navigator.clipboard.writeText(snippetArea.value);
+            alert("\uBCF5\uC0AC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+          } catch {
+            snippetArea.select();
+            doc.execCommand("copy");
+            alert("\uBCF5\uC0AC\uB418\uC5C8\uC2B5\uB2C8\uB2E4 (\uC218\uB3D9).");
           }
-          guideResult.textContent = lines.join("\n");
-          if (!panels.guide.contains(guideResult)) panels.guide.appendChild(guideResult);
         }
       })
     );
-    panels.guide.appendChild(guideResult);
-    mountScanPanel(panels.scan, {
-      Risuai,
-      secrets,
-      store,
-      edition,
-      resolveSidecarUrl,
-      pluginOptions,
-      binding,
-      bindResult
-    });
-    if (llmStore) {
+    if (!fullBlocked) {
+      mountScanPanel(panels.scan, {
+        Risuai,
+        secrets,
+        store,
+        edition,
+        resolveSidecarUrl,
+        pluginOptions,
+        binding,
+        bindResult
+      });
+    } else {
+      panels.scan.appendChild(
+        el4("p", { className: "veil-sub", text: "sidecar \uC5F0\uACB0 \uD6C4 \uC2A4\uCE94\uC744 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." })
+      );
+    }
+    if (llmStore && !fullBlocked) {
       mountLlmSettingsPanel(panels.settings, {
         Risuai,
         llmStore,
@@ -3975,6 +4125,10 @@ textarea { min-height: 120px; resize: vertical; }
           if (opts) pluginOptions = opts;
         }
       });
+    } else if (fullBlocked) {
+      panels.settings.appendChild(
+        el4("p", { className: "veil-sub", text: "sidecar \uC5F0\uACB0 \uD6C4 LLM \uC124\uC815\uC744 \uC0AC\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." })
+      );
     } else {
       panels.settings.appendChild(
         el4("p", {
@@ -4035,9 +4189,9 @@ textarea { min-height: 120px; resize: vertical; }
         icon: VEIL_BUTTON_ICON,
         iconType: "html"
       };
-      for (const location of ["hamburger", "chat"]) {
+      for (const location2 of ["hamburger", "chat"]) {
         const part = await Risuai.registerButton(
-          { ...buttonConfig, location },
+          { ...buttonConfig, location: location2 },
           open
         );
         if (part?.id) uiParts.push(part.id);
@@ -4061,23 +4215,6 @@ textarea { min-height: 120px; resize: vertical; }
 
   // full/plugin/entry.js
   var DEFAULT_SIDECAR_URL2 = "http://127.0.0.1:6010";
-  async function registerVeilFull(Risuai, secrets, store, resolveSidecarUrl) {
-    if (!Risuai || !Risuai.registerMCP) {
-      console.log("[VEIL Full] Risuai.registerMCP is not available.");
-      return;
-    }
-    await Risuai.registerMCP(
-      {
-        identifier: "plugin:veil_full",
-        name: "VEIL Full",
-        version: "0.0.1",
-        description: "Visibility Enforcement & Integrity Layer with optional sidecar assistance."
-      },
-      async () => [...BASE_TOOLS, ...FULL_EXTRA_TOOLS],
-      createFullToolHandler(secrets, store, resolveSidecarUrl, Risuai)
-    );
-    console.log("[VEIL Full] MCP module registered.");
-  }
   (async () => {
     try {
       const Risuai = typeof globalThis.Risuai !== "undefined" ? globalThis.Risuai : void 0;
@@ -4093,14 +4230,18 @@ textarea { min-height: 120px; resize: vertical; }
         Risuai,
         { sidecarUrl: DEFAULT_SIDECAR_URL2 },
         llmStore
-      ) : { sidecarUrl: DEFAULT_SIDECAR_URL2, llm: {}, llmRaw: {}, llmConfigured: false };
+      ) : {
+        sidecarUrl: DEFAULT_SIDECAR_URL2,
+        llm: {},
+        llmRaw: {},
+        llmConfigured: false
+      };
       const refreshOptions = Risuai ? () => resolvePluginOptions(
         Risuai,
         { sidecarUrl: DEFAULT_SIDECAR_URL2 },
         llmStore
       ) : null;
       if (Risuai) {
-        await registerVeilFull(Risuai, secrets, store, resolveSidecarUrl);
         await registerVeilUI(Risuai, {
           secrets,
           store,
@@ -4110,6 +4251,7 @@ textarea { min-height: 120px; resize: vertical; }
           llmStore,
           refreshOptions
         });
+        console.log(`[VEIL Full ${VEIL_VERSION}] GUI registered (sidecar required, no MCP).`);
       } else {
         console.log("[VEIL Full] Risuai is not available (dev/bundle context).");
       }
