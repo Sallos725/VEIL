@@ -1,13 +1,15 @@
-import { cloneSampleSecrets } from "../sample-secrets.js";
 import { fetchSidecar, getSidecarUrl, checkSidecarHealth } from "../sidecar-client.js";
-import { validateSecrets, STORAGE_KEY } from "./pluginStore.js";
+import { validateSecrets } from "./pluginStore.js";
 
 const CACHE_KEY = "veil_secrets_cache";
 
+const SIDECAR_REQUIRED_MSG =
+  "VEIL Full은 sidecar가 필요합니다. Docker로 sidecar를 실행한 뒤 다시 여세요.";
+
 export function createSidecarStore(ctx) {
   const { Risuai, getSidecarUrl: resolveUrl } = ctx;
-  let memory = null;
-  let lastSource = "sample";
+  let memory = [];
+  let lastSource = "unavailable";
   let sidecarOnline = false;
 
   async function getStorage() {
@@ -34,8 +36,20 @@ export function createSidecarStore(ctx) {
     return getSidecarUrl(ctx.sidecarUrl);
   }
 
+  function unavailablePayload(cached) {
+    return {
+      secrets: cached ? JSON.parse(JSON.stringify(cached)) : [],
+      source: cached ? "cache" : "unavailable",
+      sidecarOnline: false,
+      sidecarRequired: true,
+      readOnly: true,
+      error: SIDECAR_REQUIRED_MSG,
+    };
+  }
+
   return {
     edition: "full",
+    sidecarRequired: true,
     async load() {
       const url = await baseUrl();
       const health = await checkSidecarHealth(url);
@@ -47,26 +61,38 @@ export function createSidecarStore(ctx) {
           memory = JSON.parse(JSON.stringify(result.data.secrets));
           lastSource = "sidecar";
           await saveCache(memory);
-          return { secrets: memory, source: lastSource, sidecarOnline: true };
+          return {
+            secrets: memory,
+            source: lastSource,
+            sidecarOnline: true,
+            sidecarRequired: true,
+            readOnly: false,
+          };
         }
       }
 
       const cached = await loadCache();
-      if (cached) {
-        memory = JSON.parse(JSON.stringify(cached));
-        lastSource = "cache";
-        return { secrets: memory, source: lastSource, sidecarOnline };
-      }
-
-      memory = cloneSampleSecrets();
-      lastSource = "sample";
-      return { secrets: memory, source: lastSource, sidecarOnline };
+      memory = cached ? JSON.parse(JSON.stringify(cached)) : [];
+      lastSource = cached ? "cache" : "unavailable";
+      return unavailablePayload(cached);
     },
     async save(secrets) {
+      const url = await baseUrl();
+      const health = await checkSidecarHealth(url);
+      sidecarOnline = health.reachable;
+
+      if (!sidecarOnline) {
+        return {
+          ok: false,
+          error: SIDECAR_REQUIRED_MSG,
+          source: lastSource,
+          sidecarSynced: false,
+        };
+      }
+
       memory = secrets;
       await saveCache(secrets);
 
-      const url = await baseUrl();
       const result = await fetchSidecar("/secrets", {
         method: "PUT",
         baseUrl: url,
@@ -76,21 +102,39 @@ export function createSidecarStore(ctx) {
       sidecarOnline = result.ok;
       lastSource = result.ok ? "sidecar" : "cache";
 
+      if (!result.ok) {
+        return {
+          ok: false,
+          error: result.error || "Sidecar 저장 실패",
+          source: lastSource,
+          sidecarSynced: false,
+        };
+      }
+
       return {
         ok: true,
         source: lastSource,
-        sidecarSynced: result.ok,
-        error: result.ok ? undefined : result.error,
+        sidecarSynced: true,
       };
     },
     getStatus() {
-      return { source: lastSource, sidecarOnline };
+      return {
+        source: lastSource,
+        sidecarOnline,
+        sidecarRequired: true,
+        readOnly: !sidecarOnline,
+      };
     },
     async importSecrets(secrets) {
       if (!validateSecrets(secrets)) {
         return { ok: false, error: "유효하지 않은 시크릿 JSON입니다." };
       }
       const url = await baseUrl();
+      const health = await checkSidecarHealth(url);
+      if (!health.reachable) {
+        return { ok: false, error: SIDECAR_REQUIRED_MSG };
+      }
+
       const result = await fetchSidecar("/secrets/import", {
         method: "POST",
         baseUrl: url,
@@ -103,8 +147,10 @@ export function createSidecarStore(ctx) {
         sidecarOnline = true;
         return { ok: true };
       }
-      await this.save(JSON.parse(JSON.stringify(secrets)));
-      return { ok: true, fallback: true };
+      return {
+        ok: false,
+        error: result.error || "Sidecar import 실패",
+      };
     },
     async exportSecrets() {
       const url = await baseUrl();
@@ -118,7 +164,7 @@ export function createSidecarStore(ctx) {
       const url = await baseUrl();
       const health = await checkSidecarHealth(url);
       sidecarOnline = health.reachable;
-      return health;
+      return { ...health, sidecarRequired: true };
     },
   };
 }
