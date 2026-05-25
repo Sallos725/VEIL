@@ -21,3 +21,7 @@ coverage/
 
 # optional build scratch
 dist/
+
+# sidecar runtime data (user secrets)
+full/sidecar/data/*.json
+!full/sidecar/data/.gitkeep

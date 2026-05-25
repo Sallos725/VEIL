@@ -28,6 +28,18 @@ Korean framing:
 
 ---
 
+## Handoff for contributors
+
+**Start here:** [docs/HANDOFF.md](docs/HANDOFF.md) — current repo layout, commands, RisuAI integration (chat binding, `globalLore`/`localLore`, GUI LLM settings), completed milestones, and next-task suggestions.
+
+**Edit source in** `shared/`, `lite/entry.js`, `full/plugin/entry.js`. Run `npm run bundle` before importing into RisuAI. Deliverables: `lite/veil-lite.js`, `full/plugin/veil-full.js`.
+
+**GUI entry:** `registerButton` on **hamburger and chat** (not plugin-settings `//@arg` for LLM — use dashboard **LLM 설정** tab + `veil_llm_settings` in pluginStorage).
+
+**Secrets scope:** bound to current Risu character index + chat index (`bindKey` = `"charIndex:chatIndex"`). Never run full-DB lorebook scan; one Risu lore entry → one VEIL secret.
+
+---
+
 ## Correct RisuAI Assumption
 
 RisuAI plugins should be treated as JavaScript plugin files.
@@ -611,43 +623,25 @@ VEIL이 unsafe를 반환하면 해당 초안을 그대로 출력하지 않고, �
 
 ## Recommended Repository Structure
 
-The repository may use build tooling for developer convenience, but the RisuAI deliverable must be `.js`.
-
-Recommended structure:
+The repository uses **esbuild bundle** from `shared/` + edition `entry.js` files. See [docs/HANDOFF.md](docs/HANDOFF.md) for the **actual** tree.
 
 ```text
-veil/
-├─ AGENTS.md
-├─ README.md
-├─ lite/
-│  ├─ veil-lite.js
-│  └─ README.md
-├─ full/
-│  ├─ plugin/
-│  │  ├─ veil-full.js
-│  │  └─ README.md
-│  └─ sidecar/
-│     ├─ README.md
-│     ├─ package.json
-│     └─ src/
-│        └─ server.js
-├─ shared/
-│  ├─ core.js
-│  ├─ sample-secrets.js
-│  └─ README.md
+VEIL/
+├─ AGENTS.md, README.md, docs/HANDOFF.md
+├─ shared/          # edit here (core, mcp, storage, lorebook, llm, ui, chat-binding)
+├─ lite/entry.js → veil-lite.js
+├─ full/plugin/entry.js → veil-full.js
+├─ full/sidecar/    # optional Node service
 └─ tests/
-   ├─ disclosure-check.test.js
-   └─ reveal-stages.test.js
 ```
 
 Rules:
 
 ```text
-- Lite must work by copying/importing lite/veil-lite.js into RisuAI.
-- Full plugin must still be a .js RisuAI plugin.
-- Shared code must be plain JavaScript.
-- TypeScript is optional and must not be required for users.
-- If TypeScript is used later, build output must be committed or easily generated as .js.
+- Lite/Full deliverables are bundled .js files committed after npm run bundle.
+- Shared code is plain JavaScript (no TS runtime in Risu).
+- Risu lorebook fields: character.globalLore[], chat.localLore[] (not legacy lorebook[] only).
+- LLM config: GUI pluginStorage (veil_llm_settings), not //@arg llm_* (avoid user confusion).
 ```
 
 ---
@@ -861,50 +855,16 @@ Minimum tests:
 
 ## Development Order
 
+Phases 0–7 (single-file Lite → MCP → core → sidecar) are **largely complete**. See [docs/HANDOFF.md](docs/HANDOFF.md) for status.
+
+Suggested **next** phases:
+
 ```text
-Phase 0: Lite single-file plugin
-- Create lite/veil-lite.js
-- Add RisuAI plugin headers if needed
-- Add static sample secret
-- Confirm plugin loads in RisuAI
-
-Phase 1: Lite MCP registration
-- Register VEIL MCP module using Risuai.registerMCP()
-- Add get_reveal_guidance
-- Add check_disclosure
-- Return deterministic sample results
-
-Phase 2: Lite core logic
-- Add reveal stage utilities
-- Add hardBlocks check
-- Add knownBy/unknownBy check
-- Add stage-aware guidance
-
-Phase 3: Lite redaction
-- Add redact_to_allowed_stage
-- Start with simple safe guidance and basic replacement
-
-Phase 4: Lite persistence
-- Use RisuAI plugin storage only if confirmed
-- Otherwise keep importable JSON/static config
-
-Phase 5: Full plugin
-- Create full/plugin/veil-full.js
-- Keep Lite fallback logic inside it
-- Add sidecar status check
-
-Phase 6: Sidecar
-- Create simple local HTTP sidecar
-- Add /health
-- Add optional /semantic-check
-- Add optional /rewrite
-
-Phase 7: Tooling
-- Add tests for shared JS logic
-- Add optional bundling only if it emits .js plugin files
+Phase 8: Secret CRUD in GUI (per bindKey)
+Phase 9: Group chat + optional global loreBook page
+Phase 10: Richer redact / optional local LLM judge
+Phase 11: docs/QA-RISUAI.md manual test script
 ```
-
-Do not start with TypeScript-only architecture.
 
 Do not require sidecar for basic VEIL functionality.
 
