@@ -36,7 +36,7 @@ Korean framing:
 
 **GUI entry:** `registerButton` on **hamburger and chat** (not plugin-settings `//@arg` for LLM — use dashboard **LLM 설정** tab + `veil_llm_settings` in pluginStorage).
 
-**Secrets scope:** bound to current Risu character index + chat index (`bindKey` = `"charIndex:chatIndex"`). Never run full-DB lorebook scan; one Risu lore entry → one VEIL secret.
+**Secrets scope:** per Risu chat session — `bindKey` = `cid:chaId:chat.id` when `chat.id` exists, else legacy `charIndex:chatIndex`. GUI supports session picker, cid migration, per-session JSON I/O, and full secret editor. Never run full-DB lorebook scan; one Risu lore entry → one VEIL secret.
 
 ---
 
@@ -860,7 +860,7 @@ Phases 0–7 (single-file Lite → MCP → core → sidecar) are **largely compl
 Suggested **next** phases:
 
 ```text
-Phase 8: Secret CRUD in GUI (per bindKey)
+Phase 8: Secret CRUD in GUI (per bindKey) — **done (prototype):** session picker, delete, cid migration, session export/import, 상세 편집
 Phase 9: Group chat + optional global loreBook page
 Phase 10: Richer redact / optional local LLM judge
 Phase 11: docs/QA-RISUAI.md manual test script
