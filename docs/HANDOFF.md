@@ -85,6 +85,7 @@ VEIL/
    - `getDatabase(['characters'])`로 캐릭터·`chats[chatPage]` 검증
 3. MCP·GUI는 현재 세션 `bindKey`만 사용 (`cid:…` 우선, 구데이터는 인덱스 키도 매칭)
 4. 시크릿 탭: **세션 선택**, 제목 수정·삭제·세션 전체 삭제·**cid 키 일괄 변환** ([shared/chat-migration.js](../shared/chat-migration.js))
+5. **이 세션보내기 / 이 세션 가져오기** — [shared/storage/session-secrets.js](../shared/storage/session-secrets.js) (`veilSessionExport` JSON). 전체 JSON은 모든 봇·세션 포함.
 
 ### 로어북 (RisuAI 데이터 모델)
 
@@ -111,7 +112,7 @@ VEIL/
 
 | 탭 | 역할 |
 |----|------|
-| 시크릿 | 현재 채팅에 바인딩된 시크릿 목록·단계 승급 |
+| 시크릿 | 세션 선택·cid 변환·**이 세션** JSON import/export·상세 편집 |
 | 검사 | 초안 disclosure check |
 | 가이드 | 입력 키워드 → reveal guidance |
 | 스캔 | 로어북 불러오기 → 직접 등록 / LLM 분석 |

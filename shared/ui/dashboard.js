@@ -31,6 +31,11 @@ import {
   countMigratableToCid,
   migrateIndexSecretsToCid,
 } from "../chat-migration.js";
+import {
+  exportSessionSecrets,
+  parseSessionImportPayload,
+  mergeSessionImport,
+} from "../storage/session-secrets.js";
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -328,17 +333,59 @@ export async function openDashboard(doc, ctx) {
   const secretsToolbar = el("div", { className: "toolbar" });
   const importInput = el("input", { type: "file", accept: "application/json,.json" });
   importInput.style.display = "none";
+  const sessionImportInput = el("input", {
+    type: "file",
+    accept: "application/json,.json",
+  });
+  sessionImportInput.style.display = "none";
+
   secretsToolbar.appendChild(
     el("button", {
       className: "btn btn-secondary",
-      text: "JSON 가져오기",
+      text: "이 세션보내기",
+      onclick: async () => {
+        const view = resolveViewBinding();
+        if (!view) {
+          alert("채팅이 연결되지 않았습니다.");
+          return;
+        }
+        const payload = exportSessionSecrets(secrets, view);
+        const blob = new Blob([JSON.stringify(payload, null, 2)], {
+          type: "application/json",
+        });
+        const safeLabel = (view.chatLabel || "session").replace(/[^\w.-]+/g, "_");
+        const a = doc.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `veil-session-${safeLabel}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      },
+    })
+  );
+  secretsToolbar.appendChild(
+    el("button", {
+      className: "btn btn-secondary",
+      text: "이 세션 가져오기",
+      onclick: () => {
+        if (!resolveViewBinding()) {
+          alert("채팅이 연결되지 않았습니다.");
+          return;
+        }
+        sessionImportInput.click();
+      },
+    })
+  );
+  secretsToolbar.appendChild(
+    el("button", {
+      className: "btn btn-secondary",
+      text: "전체 JSON 가져오기",
       onclick: () => importInput.click(),
     })
   );
   secretsToolbar.appendChild(
     el("button", {
       className: "btn btn-secondary",
-      text: "JSON보내기",
+      text: "전체 JSON보내기",
       onclick: async () => {
         const data = await store.exportSecrets();
         const blob = new Blob([JSON.stringify(data, null, 2)], {
@@ -346,7 +393,7 @@ export async function openDashboard(doc, ctx) {
         });
         const a = doc.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = "veil-secrets.json";
+        a.download = "veil-secrets-all.json";
         a.click();
         URL.revokeObjectURL(a.href);
       },
@@ -377,6 +424,43 @@ export async function openDashboard(doc, ctx) {
   if (sessionBar.childNodes.length) panels.secrets.appendChild(sessionBar);
   panels.secrets.appendChild(secretsToolbar);
   panels.secrets.appendChild(importInput);
+  panels.secrets.appendChild(sessionImportInput);
+
+  sessionImportInput.addEventListener("change", async () => {
+    const file = sessionImportInput.files && sessionImportInput.files[0];
+    if (!file) return;
+    const view = resolveViewBinding();
+    if (!view) {
+      alert("채팅이 연결되지 않았습니다.");
+      sessionImportInput.value = "";
+      return;
+    }
+    try {
+      const parsed = JSON.parse(await file.text());
+      const parsedResult = parseSessionImportPayload(parsed);
+      if (!parsedResult.ok) {
+        alert(parsedResult.error || "가져오기 실패");
+        return;
+      }
+      const replace = confirm(
+        "확인 = 이 세션의 기존 시크릿을 지우고 가져온 목록으로 교체\n취소 = 같은 id는 덮어쓰고 나머지는 유지(병합)"
+      );
+      const result = mergeSessionImport({
+        allSecrets: secrets,
+        imported: parsedResult.secrets,
+        viewBinding: view,
+        mode: replace ? "replace" : "merge",
+      });
+      await store.save(secrets);
+      renderSecretCards();
+      alert(
+        `세션 가져오기 완료 (제거 ${result.removed}, 추가 ${result.added}, 갱신 ${result.updated})`
+      );
+    } catch (e) {
+      alert("JSON 파싱 오류: " + (e.message || e));
+    }
+    sessionImportInput.value = "";
+  });
 
   importInput.addEventListener("change", async () => {
     const file = importInput.files && importInput.files[0];
