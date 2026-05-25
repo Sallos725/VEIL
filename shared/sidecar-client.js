@@ -1,4 +1,4 @@
-const DEFAULT_SIDECAR_URL = "http://127.0.0.1:8787";
+const DEFAULT_SIDECAR_URL = "http://127.0.0.1:6010";
 const SIDECAR_TIMEOUT_MS = 2000;
 
 export function getSidecarUrl(configUrl) {
@@ -9,7 +9,8 @@ export async function fetchSidecar(path, options = {}) {
   const baseUrl = getSidecarUrl(options.baseUrl);
   const url = `${baseUrl.replace(/\/$/, "")}${path}`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SIDECAR_TIMEOUT_MS);
+  const timeoutMs = options.timeoutMs || SIDECAR_TIMEOUT_MS;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     if (typeof fetch === "undefined") {
@@ -70,5 +71,18 @@ export async function requestRewrite(payload, baseUrl) {
     method: "POST",
     baseUrl,
     body: payload,
+  });
+}
+
+export async function requestLlmStatus(baseUrl) {
+  return fetchSidecar("/llm/status", { baseUrl });
+}
+
+export async function requestLorebookScan(payload, baseUrl) {
+  return fetchSidecar("/lorebook/scan", {
+    method: "POST",
+    baseUrl,
+    body: payload,
+    timeoutMs: 120000,
   });
 }

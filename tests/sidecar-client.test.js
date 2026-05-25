@@ -4,7 +4,7 @@ import { getSidecarUrl } from "../shared/sidecar-client.js";
 
 describe("sidecar client", () => {
   it("uses default localhost url", () => {
-    assert.equal(getSidecarUrl(), "http://127.0.0.1:8787");
+    assert.equal(getSidecarUrl(), "http://127.0.0.1:6010");
   });
 
   it("respects custom url", () => {
