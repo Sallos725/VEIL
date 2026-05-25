@@ -9,8 +9,8 @@
 | 항목 | 내용 |
 |------|------|
 | 제품 | RisuAI `.js` 플러그인 — 단계적 비밀 공개·스포일러 방지 |
-| Lite | `lite/veil-lite.js` — sidecar 없이 동작 |
-| Full | `full/plugin/veil-full.js` + 선택 sidecar `:6010` |
+| Lite | `lite/veil-lite.js` — GUI + `pluginStorage` (MCP 없음) |
+| Full | `full/plugin/veil-full.js` — GUI + **sidecar 필수** `:6010` |
 | 소스 편집 | `shared/` + `lite/entry.js` / `full/plugin/entry.js` |
 | 배포 | `npm run bundle` 후 RisuAI에 `.js` import |
 | GUI | 햄버거 **+** 채팅 도구 모음 → VEIL |
@@ -38,7 +38,7 @@ RisuAI에서 플러그인 import **전에** 반드시 `bundle` 실행.
 
 ```text
 VEIL/
-├─ AGENTS.md              # 설계 스펙 (정책·MCP·단계 정의)
+├─ AGENTS.md              # 설계 스펙 (정책·단계·GUI)
 ├─ docs/HANDOFF.md        # 이 파일 — 구현 현황·인수인계
 ├─ README.md              # 사용자용 요약
 ├─ package.json           # bundle / test / sidecar 스크립트
@@ -47,8 +47,8 @@ VEIL/
 │  ├─ core.js             # guidance, disclosure, redact, advance
 │  ├─ chat-binding.js     # Risu 채팅 바인딩 (getDatabase 검증)
 │  ├─ plugin-options.js   # GUI LLM 설정 + sidecar URL 병합
-│  ├─ mcp/handlers.js     # MCP tool dispatch
-│  ├─ mcp/tools.js        # tool 스키마
+│  ├─ veil-service.js     # GUI용 API (구 MCP handlers)
+│  ├─ mcp/README.md       # MCP deprecated
 │  ├─ storage/            # pluginStore, sidecarStore, llmSettingsStore
 │  ├─ lorebook/           # 수집·스캔·직접등록
 │  ├─ llm/                # providers, browser-client, google-auth(Vertex)
@@ -72,7 +72,7 @@ VEIL/
 ### 플러그인 로드
 
 - API `//@api 3.0`, `//@name veil_lite` / `veil_full`
-- `Risuai.registerMCP()` — [shared/mcp/handlers.js](../shared/mcp/handlers.js)
+- **MCP 미사용** — `registerMCP` 호출 없음 ([shared/veil-service.js](../shared/veil-service.js)는 대시보드·sidecar용)
 - `Risuai.registerSetting()` — 플러그인 설정 좌측 **VEIL Lite / Full** — [shared/ui/register.js](../shared/ui/register.js)
 - `Risuai.registerButton()` — **hamburger + chat** — 동일 파일
 - `//@update-url` / `//@link` — [lite/banner.txt](../lite/banner.txt), [full/plugin/banner.txt](../full/plugin/banner.txt)
@@ -83,7 +83,7 @@ VEIL/
 2. [shared/chat-binding.js](../shared/chat-binding.js) `resolveChatBindingSafe()`:
    - `getCurrentCharacterIndex()` / `getCurrentChatIndex()` — **try/catch** (미선택 시 Risu 내부 `chatPage` 크래시)
    - `getDatabase(['characters'])`로 캐릭터·`chats[chatPage]` 검증
-3. MCP·GUI는 현재 세션 `bindKey`만 사용 (`cid:…` 우선, 구데이터는 인덱스 키도 매칭)
+3. GUI는 현재 세션 `bindKey`만 사용 (`cid:…` 우선, 구데이터는 인덱스 키도 매칭)
 4. 시크릿 탭: **세션 선택**, 제목 수정·삭제·세션 전체 삭제·**cid 키 일괄 변환** ([shared/chat-migration.js](../shared/chat-migration.js))
 5. **이 세션보내기 / 이 세션 가져오기** — [shared/storage/session-secrets.js](../shared/storage/session-secrets.js) (`veilSessionExport` JSON). 전체 JSON은 모든 봇·세션 포함.
 6. 카드 **「상세 편집」** — [shared/ui/secret-editor.js](../shared/ui/secret-editor.js): fullSecret, revealLadder, knownBy, hardBlocks, tags
@@ -111,38 +111,32 @@ VEIL/
 
 ## GUI 탭
 
-| 탭 | 역할 |
-|----|------|
-| 시크릿 | 세션 선택·cid 변환·**이 세션** JSON import/export·상세 편집 |
-| 검사 | 초안 disclosure check |
-| 가이드 | 입력 키워드 → reveal guidance |
-| 스캔 | 로어북 불러오기 → 직접 등록 / LLM 분석 |
-| LLM 설정 | 프로바이더·모델·키·Vertex JSON |
+| 탭 | Lite | Full |
+|----|------|------|
+| 시크릿 | CRUD, cid, JSON | sidecar SoT (오프라인 시 읽기 전용) |
+| 검사 | 휴리스틱 | + sidecar semantic |
+| 수정 | — | redact / rewrite |
+| 가이드 | reveal guidance | 동일 |
+| 스캔 | 플러그인 LLM·휴리스틱 | sidecar 스캔 |
+| LLM 설정 | pluginStorage | pluginStorage |
+| 안내 | 프롬프트 스니펫 복사 | 동일 |
+
+캐릭터 카드 스니펫: [shared/ui/prompt-snippet.js](../shared/ui/prompt-snippet.js) — **「VEIL 도구 호출」이 아니라 대시보드 사용**을 안내.
 
 ---
 
-## MCP 도구
-
-Lite·Full 공통: `get_reveal_guidance`, `check_disclosure`, `redact_to_allowed_stage`, `advance_reveal_stage`, `list_active_secrets`, `check_sidecar_status`
-
-- `advance_reveal_stage`: **`manual: true` 필수**
-- `list_active_secrets`: 현재 `bindKey`에 해당하는 시크릿만
-- 바인딩 실패 시 JSON에 `binding_required`, `user_message` (한국어)
-
----
-
-## Full sidecar
+## Full sidecar (필수)
 
 - 기본 URL: `http://127.0.0.1:6010`
 - `GET /health`, `PUT/GET /secrets`, `POST /lorebook/scan`, `POST /semantic-check`, `POST /rewrite`
-- Docker: [full/docker-compose.yml](../full/docker-compose.yml), volume `veil-data`
-- 오프라인 시 plugin cache + Lite 로직으로 degrade
+- Docker: [full/docker-compose.yml](../full/docker-compose.yml) 또는 Release `docker-compose.release.yml`
+- **오프라인**: 대시보드 게이트 — 편집·저장·스캔 비활성, 캐시 읽기 + Docker 안내만 ([shared/storage/sidecarStore.js](../shared/storage/sidecarStore.js))
 
 ---
 
 ## 완료된 마일스톤 (프로토타입)
 
-- [x] Lite/Full `.js` 플러그인 + MCP
+- [x] Lite/Full `.js` 플러그인 + GUI (MCP 제거, v0.1.0-beta 피벗)
 - [x] reveal stage + hardBlocks + knowledge boundary
 - [x] pluginStorage (Lite) / sidecar SoT (Full)
 - [x] GUI 대시보드 (한국어)
@@ -160,7 +154,7 @@ Lite·Full 공통: `get_reveal_guidance`, `check_disclosure`, `redact_to_allowed
 - 그룹 채팅(character.type === 'group') 미지원
 - 앱 전역 db.loreBook 페이지 미스캔 (캐릭터 globalLore만)
 - Vertex 토큰: 브라우저에서 JWT 교환 (서비스 계정 JSON)
-- MCP에 bind_key 자동 주입은 Risu가 호출 시 넣어줘야 함 (플러그인은 resolveChatBindingSafe로 보완)
+- Risu 모듈 경유 모델 도구 연동 — 미구현 (플러그인 MCP는 Risu RP 루프에 미노출)
 - GUI에서 시크릿 **새로 만들기**(빈 폼)는 미구현 — import·스캔·샘플 위주
 - redact/semantic: sidecar·LLM 실패 시 플러그인 휴리스틱만
 ```
@@ -169,7 +163,7 @@ Lite·Full 공통: `get_reveal_guidance`, `check_disclosure`, `redact_to_allowed
 
 1. 시크릿 CRUD UI (현재 채팅 한정)
 2. 그룹 채팅 / 전역 loreBook 지원 여부 결정
-3. MCP 호출 시 Risu hook으로 scene context 자동 채우기 (가능 시)
+3. Risu 모듈 패키지로 VEIL 도구 재노출 검토 (선택)
 4. E2E: RisuAI 수동 QA 체크리스트 → `docs/QA-RISUAI.md`
 
 ---

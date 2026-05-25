@@ -96,20 +96,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           generate_release_notes: true
-          body: |
-            ## RisuAI plugins
-            - `veil-lite.js` — Lite (pluginStorage)
-            - `veil-full.js` — Full (optional sidecar)
-
-            ## VEIL sidecar (Docker)
-            ```bash
-            docker pull ghcr.io/${{ github.repository_owner }}/veil-sidecar:${{ github.ref_name }}
-            cd full
-            docker compose -f docker-compose.release.yml up -d
-            ```
-            Image tags: `${{ github.ref_name }}`, semver, and `latest` (this release).
-
-            Health: `http://127.0.0.1:6010/health` — set Risu plugin `sidecar_url` accordingly.
+          body_path: docs/RELEASE-v0.1.0-beta.md
           files: |
             lite/veil-lite.js
             full/plugin/veil-full.js

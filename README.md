@@ -4,78 +4,62 @@
 
 RisuAI JavaScript plugin for staged secret disclosure, knowledge boundaries, and spoiler pacing.
 
+**Uses the dashboard GUI, not Risu plugin MCP tools** (Risu exposes model-callable MCP mainly through Risu modules).
+
 | Doc | Audience |
 |-----|----------|
-| [AGENTS.md](AGENTS.md) | Design spec, MCP contracts, reveal stages |
-| [docs/HANDOFF.md](docs/HANDOFF.md) | **Contributors:** layout, commands, what's done, what's next |
-| [docs/RELEASE-v0.1.0-beta.md](docs/RELEASE-v0.1.0-beta.md) | **Beta install** and known limits |
+| [AGENTS.md](AGENTS.md) | Design spec, reveal stages, GUI + sidecar |
+| [docs/HANDOFF.md](docs/HANDOFF.md) | **Contributors:** layout, commands, what's done |
+| [docs/RELEASE-v0.1.0-beta.md](docs/RELEASE-v0.1.0-beta.md) | **Beta install** |
 
 ## Editions
 
-- **Lite** — [lite/veil-lite.js](lite/veil-lite.js): no sidecar required.
-- **Full** — [full/plugin/veil-full.js](full/plugin/veil-full.js): optional [sidecar](full/sidecar/) on port **6010**.
+| Edition | Plugin | Sidecar |
+|---------|--------|---------|
+| **Lite** | [lite/veil-lite.js](lite/veil-lite.js) | Not required (`pluginStorage`) |
+| **Full** | [full/plugin/veil-full.js](full/plugin/veil-full.js) | **Required** — [sidecar](full/sidecar/) on port **6010** |
 
 ## Development
 
 ```bash
 npm install
-npm run bundle   # shared → lite/veil-lite.js, full/plugin/veil-full.js
+npm run bundle
 npm test
-npm run sidecar  # optional
+npm run sidecar   # Full — http://127.0.0.1:6010
 ```
 
-Edit [shared/](shared/) and edition `entry.js` files; **do not** hand-edit bundled `.js` except after bundle.
+Edit [shared/](shared/) and `lite/entry.js` / `full/plugin/entry.js`; run `npm run bundle` before Risu import.
 
-### Releases
+## RisuAI — Lite
 
-Push a tag **`v*`** (e.g. `v0.0.1`) to run GitHub Actions: bundle, test, publish **`ghcr.io/sallos725/veil-sidecar:<tag>`**, and attach plugins + `docker-compose.release.yml` to a Release. See [docs/HANDOFF.md](docs/HANDOFF.md#github-releases-actions).
+1. Import `veil-lite.js` from Plugin Settings (see [RELEASE](docs/RELEASE-v0.1.0-beta.md)).
+2. Select character + chat, open **VEIL** (settings sidebar / hamburger / chat toolbar).
+3. Tabs: 시크릿 · 검사 · 가이드 · 스캔 · LLM 설정 · **안내** (prompt snippet).
 
-Plugin repo: [https://github.com/Sallos725/VEIL](https://github.com/Sallos725/VEIL)
+## RisuAI — Full
 
-## RisuAI usage
+1. Start sidecar first:
 
-1. `npm run bundle`, then import `veil-lite.js` or `veil-full.js` in Plugin Settings.
-2. Select a **character and chat**, then open **VEIL** from the **hamburger menu** or **chat toolbar**.
-3. Tabs: 시크릿 · 검사 · 가이드 · 스캔 · **LLM 설정**.
-4. Secrets are scoped per **chat session** (`cid:chaId:chat.id` when Risu assigns `chat.id`). Use the secrets tab to switch sessions, edit, export/import, or migrate legacy index keys.
+```bash
+docker pull ghcr.io/sallos725/veil-sidecar:v0.1.0-beta
+cd full && docker compose -f docker-compose.release.yml up -d
+```
 
-### Lorebook scan
+2. Import `veil-full.js`, confirm dashboard shows **사이드카 연결됨**.
+3. Extra tab: **수정** (redact with sidecar `/rewrite`).
 
-- Loads Risu **`globalLore`** + current chat **`localLore`** (one entry = one secret).
-- Prefer **직접 등록**; optional LLM analysis from **LLM 설정** tab.
+If sidecar is offline, Full dashboard is **read-only** with setup instructions.
 
-### LLM
-
-Configure in the dashboard **LLM 설정** tab (saved to pluginStorage). Providers: OpenAI, Anthropic, Vertex (service account JSON), Google AI Studio, Ollama Cloud, Custom — OpenAI-compatible `/v1/chat/completions`.
-
-### Storage
+## Storage
 
 | Edition | Secrets |
 |---------|---------|
 | Lite | `pluginStorage` |
-| Full | Sidecar `secrets.json` (volume `veil-data`), cache fallback |
+| Full | Sidecar `secrets.json` (volume `veil-data`) |
 
-Full + Docker: [full/sidecar/scripts/start.sh](full/sidecar/scripts/start.sh)
+## API layer
 
-### Prompt snippet (Korean)
+Dashboard and sidecar integration: [shared/veil-service.js](shared/veil-service.js)  
+Core rules: [shared/core.js](shared/core.js)
 
-```text
-숨겨진 동기, 미공개 과거사, 페르소나 비밀, 미래 반전, OOC/비공개 메모, 현재 화자가 알 수 없는 정보를 드러내기 전에는 VEIL 도구를 사용한다.
-
-VEIL이 unsafe를 반환하면 해당 초안을 그대로 출력하지 않고, 허용된 공개 단계와 안전한 지침에 맞게 수정한다.
-
-비밀은 영구히 숨기는 것이 아니라, 암시 → 단서 → 부분 공개 → 완전 공개의 단계에 맞춰 드러낸다.
-```
-
-## MCP tools
-
-| Tool | Lite | Full |
-|------|------|------|
-| `get_reveal_guidance` | yes | yes |
-| `check_disclosure` | yes | yes (+ optional sidecar) |
-| `redact_to_allowed_stage` | yes | yes (+ optional sidecar) |
-| `advance_reveal_stage` | yes | yes |
-| `list_active_secrets` | yes | yes |
-| `check_sidecar_status` | yes | yes |
-
-See [AGENTS.md](AGENTS.md) for full design rules.
+Legacy MCP tool names in old docs map to `veil-service` functions; `registerMCP` is not called.

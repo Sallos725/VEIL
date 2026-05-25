@@ -86,8 +86,8 @@ It must be a single RisuAI-compatible JavaScript plugin file.
 Primary goals:
 
 ```text
-- register VEIL MCP tools through RisuAI plugin APIs
-- keep a small local secret registry
+- dashboard GUI for guidance, disclosure check, and secret management
+- keep a small local secret registry (pluginStorage)
 - provide deterministic staged reveal guidance
 - check draft text for premature secret disclosure
 - avoid external servers
@@ -137,21 +137,24 @@ Possible sidecar responsibilities:
 - optional UI dashboard
 ```
 
-Full architecture:
+Full architecture (v0.1.0-beta pivot):
 
 ```text
 RisuAI
-  -> VEIL JavaScript Plugin
-  -> Risuai.registerMCP()
-  -> VEIL MCP tools
-  -> optional sidecar HTTP service
+  -> VEIL Full JavaScript Plugin (GUI only — no registerMCP)
+  -> HTTP sidecar (required for Full)
+       secrets SoT, lorebook scan, semantic-check, rewrite
 ```
 
-The sidecar must never bypass the plugin.
+Lite architecture:
 
-The sidecar must never become the only source of core behavior.
+```text
+RisuAI -> VEIL Lite Plugin -> pluginStorage + dashboard GUI
+```
 
-The plugin must degrade gracefully if the sidecar is offline.
+RisuAI exposes model-callable MCP primarily through **Risu modules** (`internal:risuai`), not plugin `registerMCP`. VEIL logic for RP is invoked via the **dashboard**, implemented in [`shared/veil-service.js`](shared/veil-service.js) (formerly MCP handlers).
+
+Full **requires** sidecar online for writes; offline shows read-only cache + setup instructions. Lite does not require sidecar.
 
 ---
 
@@ -379,26 +382,26 @@ If scene context is incomplete, choose the safer option.
 
 ---
 
-## MCP Tools
+## GUI / veil-service API (not Risu MCP)
 
-Initial MCP tools:
+Operations (dashboard + [`shared/veil-service.js`](shared/veil-service.js)):
 
 ```text
-get_reveal_guidance
-check_disclosure
-redact_to_allowed_stage
-advance_reveal_stage
-list_active_secrets
-check_sidecar_status    Full only
+getRevealGuidance
+checkDisclosureLite / checkDisclosureFull
+redactDraft
+advanceStage
+listSecretsMeta
+getSidecarStatus
 ```
 
-Do not implement memory search tools.
+Legacy MCP tool names in older docs map to these functions. Do **not** call `Risuai.registerMCP()` for VEIL in current betas.
 
-Do not implement generic lore retrieval tools.
+Do not implement memory search or generic lore retrieval tools.
 
 ---
 
-## Tool: get_reveal_guidance
+## (Legacy spec) Tool: get_reveal_guidance
 
 Purpose:
 
@@ -866,34 +869,29 @@ Phase 10: Richer redact / optional local LLM judge
 Phase 11: docs/QA-RISUAI.md manual test script
 ```
 
-Do not require sidecar for basic VEIL functionality.
+Lite does not require sidecar. Full requires sidecar for beta.
 
 ---
 
 ## Definition of Done for Lite Prototype
 
-The Lite prototype is done when:
-
 ```text
-1. RisuAI loads veil-lite.js as a plugin.
-2. VEIL registers an MCP module.
-3. get_reveal_guidance returns stage-appropriate hints.
-4. check_disclosure detects at least one premature full reveal.
-5. The plugin works without Node, Python, TypeScript, or sidecar.
+1. RisuAI loads veil-lite.js.
+2. Dashboard provides guidance, disclosure check, secret management.
+3. No sidecar, no MCP registration.
+4. pluginStorage persists secrets per chat session (cid bindKey).
 ```
 
 ---
 
 ## Definition of Done for Full Prototype
 
-The Full prototype is done when:
-
 ```text
-1. RisuAI loads veil-full.js as a plugin.
-2. Full works even when sidecar is offline.
-3. check_sidecar_status detects the sidecar.
-4. Full can optionally ask sidecar for semantic checking or rewrite assistance.
-5. Lite hardBlocks and reveal-stage checks still run inside plugin code.
+1. RisuAI loads veil-full.js.
+2. Sidecar required — health gate in dashboard.
+3. Secrets SoT on sidecar; semantic check + rewrite via sidecar.
+4. Dashboard redact tab + scan via sidecar.
+5. Core hardBlocks / reveal-stage rules still in plugin shared/core.js.
 ```
 
 ---
