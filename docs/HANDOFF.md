@@ -60,7 +60,7 @@ VEIL/
 ├─ full/
 │  ├─ plugin/entry.js, veil-full.js, banner.txt
 │  └─ sidecar/            # Node HTTP helper
-└─ tests/                 # node --test tests/**/*.test.js
+└─ tests/                 # npm test → scripts/run-tests.mjs
 ```
 
 **편집하지 않는 것:** `lite/veil-lite.js`, `full/plugin/veil-full.js` (번들 산출물).
