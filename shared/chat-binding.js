@@ -4,10 +4,13 @@
 
 /**
  * @typedef {object} ChatBinding
- * @property {string} bindKey
+ * @property {string} bindKey — primary scope key (cid:… when chat.id exists)
+ * @property {string} [bindKeyLegacy] — index key `${charIndex}:${chatIndex}` for older data
+ * @property {string[]} matchKeys — keys accepted by secretMatchesBinding
+ * @property {string} [chatSessionId] — Risu chat.id (stable across reorder)
  * @property {number} charIndex
  * @property {number} chatIndex
- * @property {string} characterId
+ * @property {string} characterId — chaId
  * @property {string} characterName
  * @property {string} chatLabel
  * @property {string} label
@@ -70,11 +73,48 @@ function ok(binding) {
 }
 
 /**
+ * Legacy index bind key (array position — breaks if chats are reordered).
  * @param {number} charIndex
  * @param {number} chatIndex
  */
 export function makeBindKey(charIndex, chatIndex) {
   return `${charIndex}:${chatIndex}`;
+}
+
+/**
+ * Stable session bind key from Risu character id + chat.id.
+ * @param {string} characterId — chaId
+ * @param {string} chatSessionId — chat.id
+ */
+export function makeSessionBindKey(characterId, chatSessionId) {
+  return `cid:${characterId}:${chatSessionId}`;
+}
+
+/**
+ * @param {ChatBinding} binding
+ */
+export function getMatchKeys(binding) {
+  if (!binding) return [];
+  if (Array.isArray(binding.matchKeys) && binding.matchKeys.length) {
+    return binding.matchKeys;
+  }
+  const keys = [];
+  if (binding.bindKey) keys.push(binding.bindKey);
+  if (binding.bindKeyLegacy && !keys.includes(binding.bindKeyLegacy)) {
+    keys.push(binding.bindKeyLegacy);
+  }
+  return keys;
+}
+
+/**
+ * @param {string} bindKey
+ * @param {string} [bindKeyLegacy]
+ */
+function buildMatchKeys(bindKey, bindKeyLegacy) {
+  const keys = [];
+  if (bindKey) keys.push(bindKey);
+  if (bindKeyLegacy && !keys.includes(bindKeyLegacy)) keys.push(bindKeyLegacy);
+  return keys;
 }
 
 function normalizeIndex(value) {
@@ -171,12 +211,22 @@ export async function resolveChatBindingSafe(Risuai) {
   const characterName =
     character.name || character.displayName || `캐릭터 #${charIndex}`;
   const characterId = String(character.chaId ?? character.id ?? charIndex);
+  const chatSessionId =
+    chat.id != null && String(chat.id).length > 0
+      ? String(chat.id)
+      : null;
   const chatLabel =
     chat.name || chat.title || chat.chatName || `채팅 #${chatIndex + 1}`;
-  const bindKey = makeBindKey(charIndex, chatIndex);
+  const bindKeyLegacy = makeBindKey(charIndex, chatIndex);
+  const bindKey = chatSessionId
+    ? makeSessionBindKey(characterId, chatSessionId)
+    : bindKeyLegacy;
 
   return ok({
     bindKey,
+    bindKeyLegacy: chatSessionId ? bindKeyLegacy : undefined,
+    matchKeys: buildMatchKeys(bindKey, chatSessionId ? bindKeyLegacy : undefined),
+    chatSessionId: chatSessionId || undefined,
     charIndex,
     chatIndex,
     characterId,
@@ -200,25 +250,57 @@ export async function resolveChatBinding(Risuai) {
  */
 export function bindingBannerText(result) {
   if (result.ok && result.binding) {
-    return `연결된 채팅: ${result.binding.label} — 이 봇·세션에만 시크릿이 적용됩니다.`;
+    const stable = result.binding.chatSessionId
+      ? " (세션 ID 고정)"
+      : " (인덱스 키 — 채팅 순서 변경 시 주의)";
+    return `연결된 채팅: ${result.binding.label}${stable} — 이 세션에만 시크릿이 적용됩니다.`;
   }
   return result.userMessage || BINDING_GUIDE;
 }
 
 /**
- * @param {VeilSecret[]} secrets
- * @param {string | undefined} bindKey
+ * @param {VeilSecret} secret
+ * @param {string | ChatBinding} bindKeyOrBinding
  */
-export function filterSecretsForBinding(secrets, bindKey) {
-  if (!bindKey) return [];
-  return secrets.filter((secret) => secretMatchesBinding(secret, bindKey));
+export function secretMatchesBinding(secret, bindKeyOrBinding) {
+  if (!secret || !bindKeyOrBinding) return false;
+
+  const keys =
+    typeof bindKeyOrBinding === "string"
+      ? [bindKeyOrBinding]
+      : getMatchKeys(bindKeyOrBinding);
+
+  if (keys.length === 0) return false;
+
+  for (const key of keys) {
+    if (secret.bindKey === key) return true;
+    if (secret.scopeType === "chat" && secret.scopeId === key) return true;
+    if (secret.bindKeyLegacy === key) return true;
+  }
+
+  if (typeof bindKeyOrBinding !== "string") {
+    const { characterId, chatSessionId } = bindKeyOrBinding;
+    if (
+      chatSessionId &&
+      secret.chatSessionId === chatSessionId &&
+      (!secret.characterId || secret.characterId === characterId)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
-export function secretMatchesBinding(secret, bindKey) {
-  if (!bindKey) return false;
-  if (secret.bindKey === bindKey) return true;
-  if (secret.scopeType === "chat" && secret.scopeId === bindKey) return true;
-  return false;
+/**
+ * @param {VeilSecret[]} secrets
+ * @param {string | ChatBinding} bindKeyOrBinding
+ */
+export function filterSecretsForBinding(secrets, bindKeyOrBinding) {
+  if (!bindKeyOrBinding) return [];
+  return secrets.filter((secret) =>
+    secretMatchesBinding(secret, bindKeyOrBinding)
+  );
 }
 
 /**
@@ -229,6 +311,8 @@ export function attachChatBinding(secret, binding) {
   return {
     ...secret,
     bindKey: binding.bindKey,
+    bindKeyLegacy: binding.bindKeyLegacy,
+    chatSessionId: binding.chatSessionId,
     scopeType: "chat",
     scopeId: binding.bindKey,
     characterIndex: binding.charIndex,
@@ -242,20 +326,39 @@ export function attachChatBinding(secret, binding) {
 
 /**
  * @param {VeilSecret[]} secrets
- * @param {string} bindKey
+ * @param {string | ChatBinding} bindKeyOrBinding
  */
-export function migrateUnboundSecretsToBinding(secrets, bindKey) {
-  const hasBound = secrets.some((s) => s.bindKey || s.scopeType === "chat");
+export function migrateUnboundSecretsToBinding(secrets, bindKeyOrBinding) {
+  const keys =
+    typeof bindKeyOrBinding === "string"
+      ? [bindKeyOrBinding]
+      : getMatchKeys(bindKeyOrBinding);
+  const primary = keys[0];
+  if (!primary) return 0;
+
+  const hasBound = secrets.some(
+    (s) => s.bindKey || s.scopeType === "chat" || s.chatSessionId
+  );
   if (hasBound) return 0;
 
   let count = 0;
   for (const secret of secrets) {
     if (!secret.bindKey) {
-      Object.assign(secret, {
-        bindKey,
+      const patch = {
+        bindKey: primary,
         scopeType: "chat",
-        scopeId: bindKey,
-      });
+        scopeId: primary,
+      };
+      if (typeof bindKeyOrBinding !== "string") {
+        Object.assign(patch, {
+          bindKeyLegacy: bindKeyOrBinding.bindKeyLegacy,
+          chatSessionId: bindKeyOrBinding.chatSessionId,
+          characterId: bindKeyOrBinding.characterId,
+          characterIndex: bindKeyOrBinding.charIndex,
+          chatIndex: bindKeyOrBinding.chatIndex,
+        });
+      }
+      Object.assign(secret, patch);
       count += 1;
     }
   }
@@ -273,6 +376,7 @@ export function enrichContextWithBinding(ctx, binding) {
     bind_key: binding.bindKey,
     chat_bind_key: binding.bindKey,
     chat_id: binding.bindKey,
+    chat_session_id: binding.chatSessionId,
     character_id: binding.characterId,
     character_index: binding.charIndex,
     chat_index: binding.chatIndex,
@@ -293,9 +397,11 @@ export async function resolveScopedSecrets(Risuai, allSecrets, ctx = {}) {
     (typeof ctx.chat_bind_key === "string" && ctx.chat_bind_key) ||
     binding?.bindKey;
 
-  const scoped = bindKey
-    ? filterSecretsForBinding(allSecrets, bindKey)
-    : [];
+  const scoped = binding
+    ? filterSecretsForBinding(allSecrets, binding)
+    : bindKey
+      ? filterSecretsForBinding(allSecrets, bindKey)
+      : [];
 
   return {
     binding,
@@ -304,4 +410,89 @@ export async function resolveScopedSecrets(Risuai, allSecrets, ctx = {}) {
     scoped,
     context: enrichContextWithBinding(ctx, binding),
   };
+}
+
+/**
+ * List Risu chats for a character (for session picker).
+ * @param {object} character
+ * @returns {{ chatIndex: number, chatSessionId: string | null, label: string, bindKey: string, bindKeyLegacy: string }[]}
+ */
+export function listCharacterChatSessions(character, charIndex) {
+  const chats = character?.chats;
+  if (!Array.isArray(chats)) return [];
+  const characterId = String(character.chaId ?? character.id ?? charIndex);
+  return chats.map((chat, chatIndex) => {
+    const chatSessionId =
+      chat?.id != null && String(chat.id).length > 0
+        ? String(chat.id)
+        : null;
+    const bindKeyLegacy = makeBindKey(charIndex, chatIndex);
+    const bindKey = chatSessionId
+      ? makeSessionBindKey(characterId, chatSessionId)
+      : bindKeyLegacy;
+    const label =
+      chat?.name || chat?.title || chat?.chatName || `채팅 #${chatIndex + 1}`;
+    return {
+      chatIndex,
+      chatSessionId,
+      label,
+      bindKey,
+      bindKeyLegacy,
+      characterId,
+    };
+  });
+}
+
+/**
+ * Summarize stored secrets per bind key for one character.
+ * @param {VeilSecret[]} secrets
+ * @param {string} characterId
+ */
+export function summarizeSecretSessions(secrets, characterId) {
+  /** @type {Map<string, { bindKey: string, label: string, count: number, chatSessionId?: string }>} */
+  const map = new Map();
+  for (const secret of secrets) {
+    if (secret.characterId && secret.characterId !== characterId) continue;
+    const key = secret.bindKey || secret.scopeId;
+    if (!key) continue;
+    const entry = map.get(key) || {
+      bindKey: key,
+      label:
+        secret.chatLabel ||
+        (secret.chatSessionId
+          ? `세션 ${secret.chatSessionId.slice(0, 8)}…`
+          : key),
+      count: 0,
+      chatSessionId: secret.chatSessionId,
+    };
+    entry.count += 1;
+    if (secret.chatLabel) entry.label = secret.chatLabel;
+    map.set(key, entry);
+  }
+  return [...map.values()].sort((a, b) => b.count - a.count);
+}
+
+/**
+ * @param {VeilSecret[]} secrets
+ * @param {string} secretId
+ */
+export function removeSecretById(secrets, secretId) {
+  const idx = secrets.findIndex((s) => s.id === secretId);
+  if (idx < 0) return { ok: false, error: "시크릿을 찾을 수 없습니다." };
+  secrets.splice(idx, 1);
+  return { ok: true };
+}
+
+/**
+ * @param {VeilSecret[]} secrets
+ * @param {string | ChatBinding} bindKeyOrBinding
+ */
+export function removeSecretsForBinding(secrets, bindKeyOrBinding) {
+  const before = secrets.length;
+  for (let i = secrets.length - 1; i >= 0; i -= 1) {
+    if (secretMatchesBinding(secrets[i], bindKeyOrBinding)) {
+      secrets.splice(i, 1);
+    }
+  }
+  return { ok: true, removed: before - secrets.length };
 }

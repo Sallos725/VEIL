@@ -112,10 +112,13 @@ export function createLiteToolHandler(
           ...meta,
         });
       case "advance_reveal_stage": {
-        if (bindKey && !secretMatchesBinding(
-          secrets.find((s) => s.id === ctx.secret_id) || {},
-          bindKey
-        )) {
+        if (
+          binding &&
+          !secretMatchesBinding(
+            secrets.find((s) => s.id === ctx.secret_id) || {},
+            binding
+          )
+        ) {
           return jsonResult({
             ok: false,
             error: "현재 채팅에 바인딩된 시크릿이 아닙니다.",
@@ -241,10 +244,13 @@ export function createFullToolHandler(
         return jsonResult({ ...liteRedaction, sidecar_assisted: false, ...meta });
       }
       case "advance_reveal_stage": {
-        if (bindKey && !secretMatchesBinding(
-          secrets.find((s) => s.id === ctx.secret_id) || {},
-          bindKey
-        )) {
+        if (
+          binding &&
+          !secretMatchesBinding(
+            secrets.find((s) => s.id === ctx.secret_id) || {},
+            binding
+          )
+        ) {
           return jsonResult({
             ok: false,
             error: "현재 채팅에 바인딩된 시크릿이 아닙니다.",

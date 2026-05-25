@@ -150,6 +150,27 @@ textarea { min-height: 120px; resize: vertical; }
   border-color: #6a5030;
   color: #f0d69e;
 }
+.veil-session-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  background: #1a2030;
+  border-radius: 8px;
+  border: 1px solid #2e3a55;
+}
+.veil-session-bar .veil-select {
+  min-width: 200px;
+  max-width: 100%;
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #3a4a70;
+  background: #12182a;
+  color: #e8eaf0;
+}
 .veil-app ol {
   margin: 8px 0 0;
   padding-left: 1.25rem;

@@ -22,6 +22,10 @@ import {
   filterSecretsForBinding,
   migrateUnboundSecretsToBinding,
   attachChatBinding,
+  listCharacterChatSessions,
+  summarizeSecretSessions,
+  removeSecretById,
+  removeSecretsForBinding,
 } from "../chat-binding.js";
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -67,13 +71,49 @@ export async function openDashboard(doc, ctx) {
   const bindResult = await resolveChatBindingSafe(Risuai);
   const binding = bindResult.binding;
   if (binding) {
-    const migrated = migrateUnboundSecretsToBinding(secrets, binding.bindKey);
+    const migrated = migrateUnboundSecretsToBinding(secrets, binding);
     if (migrated > 0) await store.save(secrets);
   }
 
+  let viewBindKey = binding?.bindKey || null;
+  let characterRecord = null;
+  if (binding && Risuai?.getDatabase) {
+    try {
+      const db = await Risuai.getDatabase(["characters"]);
+      characterRecord = db?.characters?.[binding.charIndex] || null;
+    } catch {
+      characterRecord = null;
+    }
+  }
+
+  function resolveViewBinding() {
+    if (!binding || !viewBindKey) return binding;
+    if (viewBindKey === binding.bindKey) return binding;
+    const sessions = characterRecord
+      ? listCharacterChatSessions(characterRecord, binding.charIndex)
+      : [];
+    const session = sessions.find((s) => s.bindKey === viewBindKey);
+    if (session) {
+      return {
+        ...binding,
+        bindKey: session.bindKey,
+        bindKeyLegacy: session.bindKeyLegacy,
+        matchKeys: session.chatSessionId
+          ? [session.bindKey, session.bindKeyLegacy]
+          : [session.bindKey],
+        chatSessionId: session.chatSessionId || undefined,
+        chatIndex: session.chatIndex,
+        chatLabel: session.label,
+        label: `${binding.characterName} · ${session.label}`,
+      };
+    }
+    return { ...binding, bindKey: viewBindKey, matchKeys: [viewBindKey] };
+  }
+
   function getBoundSecrets() {
-    if (!bindResult.ok || !binding?.bindKey) return [];
-    return filterSecretsForBinding(secrets, binding.bindKey);
+    const view = resolveViewBinding();
+    if (!bindResult.ok || !view?.bindKey) return [];
+    return filterSecretsForBinding(secrets, view);
   }
 
   if (edition === "full" && store.refreshHealth) {
@@ -194,6 +234,63 @@ export async function openDashboard(doc, ctx) {
   root.insertBefore(tabs, panels.secrets);
 
   // --- Secrets panel ---
+  const sessionBar = el("div", { className: "veil-session-bar" });
+  if (binding && characterRecord) {
+    const sessions = listCharacterChatSessions(
+      characterRecord,
+      binding.charIndex
+    );
+    const stored = summarizeSecretSessions(secrets, binding.characterId);
+    const sessionSelect = el("select", { className: "veil-select" });
+    for (const s of sessions) {
+      const storedEntry = stored.find((x) => x.bindKey === s.bindKey);
+      const count = storedEntry?.count || 0;
+      const opt = el("option", {
+        value: s.bindKey,
+        text: `${s.label} (${count}개)${s.chatSessionId ? "" : " · 인덱스"}`,
+      });
+      if (s.bindKey === viewBindKey) opt.selected = true;
+      sessionSelect.appendChild(opt);
+    }
+    sessionSelect.addEventListener("change", () => {
+      viewBindKey = sessionSelect.value;
+      renderSecretCards();
+    });
+    sessionBar.appendChild(
+      el("label", { className: "veil-sub", text: "세션: " })
+    );
+    sessionBar.appendChild(sessionSelect);
+    sessionBar.appendChild(
+      el("button", {
+        className: "btn btn-secondary",
+        text: "이 세션 데이터 전체 삭제",
+        onclick: async () => {
+          const view = resolveViewBinding();
+          const n = filterSecretsForBinding(secrets, view).length;
+          if (
+            !n ||
+            !confirm(
+              `이 채팅 세션의 VEIL 시크릿 ${n}개를 모두 삭제할까요? 되돌릴 수 없습니다.`
+            )
+          ) {
+            return;
+          }
+          removeSecretsForBinding(secrets, view);
+          await store.save(secrets);
+          renderSecretCards();
+        },
+      })
+    );
+    if (!binding.chatSessionId) {
+      sessionBar.appendChild(
+        el("p", {
+          className: "veil-sub",
+          text: "이 채팅에 Risu chat.id가 없습니다. 채팅을 한 번 저장·동기화하면 cid 키로 고정됩니다.",
+        })
+      );
+    }
+  }
+
   const secretsToolbar = el("div", { className: "toolbar" });
   const importInput = el("input", { type: "file", accept: "application/json,.json" });
   importInput.style.display = "none";
@@ -243,6 +340,7 @@ export async function openDashboard(doc, ctx) {
       },
     })
   );
+  if (sessionBar.childNodes.length) panels.secrets.appendChild(sessionBar);
   panels.secrets.appendChild(secretsToolbar);
   panels.secrets.appendChild(importInput);
 
@@ -313,10 +411,42 @@ export async function openDashboard(doc, ctx) {
       meta.appendChild(
         el("span", {
           className: "badge",
-          text: secret.bindKey || `${secret.scopeType}:${secret.scopeId}`,
+          text:
+            secret.chatSessionId
+              ? `cid:${String(secret.chatSessionId).slice(0, 8)}…`
+              : secret.bindKey || `${secret.scopeType}:${secret.scopeId}`,
         })
       );
       card.appendChild(meta);
+
+      const actions = el("div", { className: "row" });
+      actions.appendChild(
+        el("button", {
+          className: "btn btn-secondary",
+          text: "제목 수정",
+          onclick: async () => {
+            const next = prompt("시크릿 제목", secret.title || "");
+            if (next == null || !next.trim()) return;
+            secret.title = next.trim();
+            secret.updatedAt = new Date().toISOString();
+            await store.save(secrets);
+            renderSecretCards();
+          },
+        })
+      );
+      actions.appendChild(
+        el("button", {
+          className: "btn btn-secondary",
+          text: "삭제",
+          onclick: async () => {
+            if (!confirm(`「${maskTitle(secret)}」 시크릿을 삭제할까요?`)) return;
+            removeSecretById(secrets, secret.id);
+            await store.save(secrets);
+            renderSecretCards();
+          },
+        })
+      );
+      card.appendChild(actions);
       const known =
         secret.knownBy?.length > 0
           ? secret.knownBy.join(", ")

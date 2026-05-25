@@ -14,7 +14,7 @@
 | 소스 편집 | `shared/` + `lite/entry.js` / `full/plugin/entry.js` |
 | 배포 | `npm run bundle` 후 RisuAI에 `.js` import |
 | GUI | 햄버거 **+** 채팅 도구 모음 → VEIL |
-| 시크릿 범위 | **현재 캐릭터·채팅** (`charIndex:chatIndex`)에만 적용 |
+| 시크릿 범위 | **봇·채팅 세션** — Risu `chat.id` 있으면 `cid:chaId:chatId`, 없으면 `charIndex:chatIndex` |
 | 로어북 | Risu `globalLore` / `localLore` — **항목 1개 = 시크릿 1개** |
 | LLM | GUI **「LLM 설정」** 탭 (pluginStorage), OpenAI 호환 API |
 
@@ -83,7 +83,8 @@ VEIL/
 2. [shared/chat-binding.js](../shared/chat-binding.js) `resolveChatBindingSafe()`:
    - `getCurrentCharacterIndex()` / `getCurrentChatIndex()` — **try/catch** (미선택 시 Risu 내부 `chatPage` 크래시)
    - `getDatabase(['characters'])`로 캐릭터·`chats[chatPage]` 검증
-3. MCP·GUI는 `bindKey = "${charIndex}:${chatIndex}"` 시크릿만 사용
+3. MCP·GUI는 현재 세션 `bindKey`만 사용 (`cid:…` 우선, 구데이터는 인덱스 키도 매칭)
+4. 시크릿 탭: **세션 선택**, 제목 수정·삭제·세션 전체 삭제
 
 ### 로어북 (RisuAI 데이터 모델)
 

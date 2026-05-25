@@ -824,6 +824,27 @@
   function makeBindKey(charIndex, chatIndex) {
     return `${charIndex}:${chatIndex}`;
   }
+  function makeSessionBindKey(characterId, chatSessionId) {
+    return `cid:${characterId}:${chatSessionId}`;
+  }
+  function getMatchKeys(binding) {
+    if (!binding) return [];
+    if (Array.isArray(binding.matchKeys) && binding.matchKeys.length) {
+      return binding.matchKeys;
+    }
+    const keys = [];
+    if (binding.bindKey) keys.push(binding.bindKey);
+    if (binding.bindKeyLegacy && !keys.includes(binding.bindKeyLegacy)) {
+      keys.push(binding.bindKeyLegacy);
+    }
+    return keys;
+  }
+  function buildMatchKeys(bindKey, bindKeyLegacy) {
+    const keys = [];
+    if (bindKey) keys.push(bindKey);
+    if (bindKeyLegacy && !keys.includes(bindKeyLegacy)) keys.push(bindKeyLegacy);
+    return keys;
+  }
   function normalizeIndex(value) {
     if (value == null || value === "") return null;
     const n = Number(value);
@@ -894,10 +915,15 @@
     }
     const characterName = character.name || character.displayName || `\uCE90\uB9AD\uD130 #${charIndex}`;
     const characterId = String(character.chaId ?? character.id ?? charIndex);
+    const chatSessionId = chat.id != null && String(chat.id).length > 0 ? String(chat.id) : null;
     const chatLabel = chat.name || chat.title || chat.chatName || `\uCC44\uD305 #${chatIndex + 1}`;
-    const bindKey = makeBindKey(charIndex, chatIndex);
+    const bindKeyLegacy = makeBindKey(charIndex, chatIndex);
+    const bindKey = chatSessionId ? makeSessionBindKey(characterId, chatSessionId) : bindKeyLegacy;
     return ok({
       bindKey,
+      bindKeyLegacy: chatSessionId ? bindKeyLegacy : void 0,
+      matchKeys: buildMatchKeys(bindKey, chatSessionId ? bindKeyLegacy : void 0),
+      chatSessionId: chatSessionId || void 0,
       charIndex,
       chatIndex,
       characterId,
@@ -908,24 +934,40 @@
   }
   function bindingBannerText(result) {
     if (result.ok && result.binding) {
-      return `\uC5F0\uACB0\uB41C \uCC44\uD305: ${result.binding.label} \u2014 \uC774 \uBD07\xB7\uC138\uC158\uC5D0\uB9CC \uC2DC\uD06C\uB9BF\uC774 \uC801\uC6A9\uB429\uB2C8\uB2E4.`;
+      const stable = result.binding.chatSessionId ? " (\uC138\uC158 ID \uACE0\uC815)" : " (\uC778\uB371\uC2A4 \uD0A4 \u2014 \uCC44\uD305 \uC21C\uC11C \uBCC0\uACBD \uC2DC \uC8FC\uC758)";
+      return `\uC5F0\uACB0\uB41C \uCC44\uD305: ${result.binding.label}${stable} \u2014 \uC774 \uC138\uC158\uC5D0\uB9CC \uC2DC\uD06C\uB9BF\uC774 \uC801\uC6A9\uB429\uB2C8\uB2E4.`;
     }
     return result.userMessage || BINDING_GUIDE;
   }
-  function filterSecretsForBinding(secrets, bindKey) {
-    if (!bindKey) return [];
-    return secrets.filter((secret) => secretMatchesBinding(secret, bindKey));
-  }
-  function secretMatchesBinding(secret, bindKey) {
-    if (!bindKey) return false;
-    if (secret.bindKey === bindKey) return true;
-    if (secret.scopeType === "chat" && secret.scopeId === bindKey) return true;
+  function secretMatchesBinding(secret, bindKeyOrBinding) {
+    if (!secret || !bindKeyOrBinding) return false;
+    const keys = typeof bindKeyOrBinding === "string" ? [bindKeyOrBinding] : getMatchKeys(bindKeyOrBinding);
+    if (keys.length === 0) return false;
+    for (const key of keys) {
+      if (secret.bindKey === key) return true;
+      if (secret.scopeType === "chat" && secret.scopeId === key) return true;
+      if (secret.bindKeyLegacy === key) return true;
+    }
+    if (typeof bindKeyOrBinding !== "string") {
+      const { characterId, chatSessionId } = bindKeyOrBinding;
+      if (chatSessionId && secret.chatSessionId === chatSessionId && (!secret.characterId || secret.characterId === characterId)) {
+        return true;
+      }
+    }
     return false;
+  }
+  function filterSecretsForBinding(secrets, bindKeyOrBinding) {
+    if (!bindKeyOrBinding) return [];
+    return secrets.filter(
+      (secret) => secretMatchesBinding(secret, bindKeyOrBinding)
+    );
   }
   function attachChatBinding(secret, binding) {
     return {
       ...secret,
       bindKey: binding.bindKey,
+      bindKeyLegacy: binding.bindKeyLegacy,
+      chatSessionId: binding.chatSessionId,
       scopeType: "chat",
       scopeId: binding.bindKey,
       characterIndex: binding.charIndex,
@@ -936,17 +978,32 @@
       updatedAt: secret.updatedAt || (/* @__PURE__ */ new Date()).toISOString()
     };
   }
-  function migrateUnboundSecretsToBinding(secrets, bindKey) {
-    const hasBound = secrets.some((s) => s.bindKey || s.scopeType === "chat");
+  function migrateUnboundSecretsToBinding(secrets, bindKeyOrBinding) {
+    const keys = typeof bindKeyOrBinding === "string" ? [bindKeyOrBinding] : getMatchKeys(bindKeyOrBinding);
+    const primary = keys[0];
+    if (!primary) return 0;
+    const hasBound = secrets.some(
+      (s) => s.bindKey || s.scopeType === "chat" || s.chatSessionId
+    );
     if (hasBound) return 0;
     let count = 0;
     for (const secret of secrets) {
       if (!secret.bindKey) {
-        Object.assign(secret, {
-          bindKey,
+        const patch = {
+          bindKey: primary,
           scopeType: "chat",
-          scopeId: bindKey
-        });
+          scopeId: primary
+        };
+        if (typeof bindKeyOrBinding !== "string") {
+          Object.assign(patch, {
+            bindKeyLegacy: bindKeyOrBinding.bindKeyLegacy,
+            chatSessionId: bindKeyOrBinding.chatSessionId,
+            characterId: bindKeyOrBinding.characterId,
+            characterIndex: bindKeyOrBinding.charIndex,
+            chatIndex: bindKeyOrBinding.chatIndex
+          });
+        }
+        Object.assign(secret, patch);
         count += 1;
       }
     }
@@ -959,6 +1016,7 @@
       bind_key: binding.bindKey,
       chat_bind_key: binding.bindKey,
       chat_id: binding.bindKey,
+      chat_session_id: binding.chatSessionId,
       character_id: binding.characterId,
       character_index: binding.charIndex,
       chat_index: binding.chatIndex,
@@ -969,7 +1027,7 @@
     const bindResult = await resolveChatBindingSafe(Risuai);
     const binding = bindResult.binding;
     const bindKey = typeof ctx.bind_key === "string" && ctx.bind_key || typeof ctx.chat_bind_key === "string" && ctx.chat_bind_key || binding?.bindKey;
-    const scoped = bindKey ? filterSecretsForBinding(allSecrets, bindKey) : [];
+    const scoped = binding ? filterSecretsForBinding(allSecrets, binding) : bindKey ? filterSecretsForBinding(allSecrets, bindKey) : [];
     return {
       binding,
       bindResult,
@@ -977,6 +1035,58 @@
       scoped,
       context: enrichContextWithBinding(ctx, binding)
     };
+  }
+  function listCharacterChatSessions(character, charIndex) {
+    const chats = character?.chats;
+    if (!Array.isArray(chats)) return [];
+    const characterId = String(character.chaId ?? character.id ?? charIndex);
+    return chats.map((chat, chatIndex) => {
+      const chatSessionId = chat?.id != null && String(chat.id).length > 0 ? String(chat.id) : null;
+      const bindKeyLegacy = makeBindKey(charIndex, chatIndex);
+      const bindKey = chatSessionId ? makeSessionBindKey(characterId, chatSessionId) : bindKeyLegacy;
+      const label = chat?.name || chat?.title || chat?.chatName || `\uCC44\uD305 #${chatIndex + 1}`;
+      return {
+        chatIndex,
+        chatSessionId,
+        label,
+        bindKey,
+        bindKeyLegacy,
+        characterId
+      };
+    });
+  }
+  function summarizeSecretSessions(secrets, characterId) {
+    const map = /* @__PURE__ */ new Map();
+    for (const secret of secrets) {
+      if (secret.characterId && secret.characterId !== characterId) continue;
+      const key = secret.bindKey || secret.scopeId;
+      if (!key) continue;
+      const entry = map.get(key) || {
+        bindKey: key,
+        label: secret.chatLabel || (secret.chatSessionId ? `\uC138\uC158 ${secret.chatSessionId.slice(0, 8)}\u2026` : key),
+        count: 0,
+        chatSessionId: secret.chatSessionId
+      };
+      entry.count += 1;
+      if (secret.chatLabel) entry.label = secret.chatLabel;
+      map.set(key, entry);
+    }
+    return [...map.values()].sort((a, b) => b.count - a.count);
+  }
+  function removeSecretById(secrets, secretId) {
+    const idx = secrets.findIndex((s) => s.id === secretId);
+    if (idx < 0) return { ok: false, error: "\uC2DC\uD06C\uB9BF\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4." };
+    secrets.splice(idx, 1);
+    return { ok: true };
+  }
+  function removeSecretsForBinding(secrets, bindKeyOrBinding) {
+    const before = secrets.length;
+    for (let i = secrets.length - 1; i >= 0; i -= 1) {
+      if (secretMatchesBinding(secrets[i], bindKeyOrBinding)) {
+        secrets.splice(i, 1);
+      }
+    }
+    return { ok: true, removed: before - secrets.length };
   }
 
   // shared/llm/prompts.js
@@ -1617,9 +1727,9 @@ Korean titles preferred if source is Korean.`;
           return jsonResult({ ...liteRedaction, sidecar_assisted: false, ...meta });
         }
         case "advance_reveal_stage": {
-          if (bindKey && !secretMatchesBinding(
+          if (binding && !secretMatchesBinding(
             secrets.find((s) => s.id === ctx.secret_id) || {},
-            bindKey
+            binding
           )) {
             return jsonResult({
               ok: false,
@@ -1801,6 +1911,27 @@ textarea { min-height: 120px; resize: vertical; }
   background: #3a2a1f;
   border-color: #6a5030;
   color: #f0d69e;
+}
+.veil-session-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  background: #1a2030;
+  border-radius: 8px;
+  border: 1px solid #2e3a55;
+}
+.veil-session-bar .veil-select {
+  min-width: 200px;
+  max-width: 100%;
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #3a4a70;
+  background: #12182a;
+  color: #e8eaf0;
 }
 .veil-app ol {
   margin: 8px 0 0;
@@ -2852,12 +2983,42 @@ textarea { min-height: 120px; resize: vertical; }
     const bindResult = await resolveChatBindingSafe(Risuai);
     const binding = bindResult.binding;
     if (binding) {
-      const migrated = migrateUnboundSecretsToBinding(secrets, binding.bindKey);
+      const migrated = migrateUnboundSecretsToBinding(secrets, binding);
       if (migrated > 0) await store.save(secrets);
     }
+    let viewBindKey = binding?.bindKey || null;
+    let characterRecord = null;
+    if (binding && Risuai?.getDatabase) {
+      try {
+        const db = await Risuai.getDatabase(["characters"]);
+        characterRecord = db?.characters?.[binding.charIndex] || null;
+      } catch {
+        characterRecord = null;
+      }
+    }
+    function resolveViewBinding() {
+      if (!binding || !viewBindKey) return binding;
+      if (viewBindKey === binding.bindKey) return binding;
+      const sessions = characterRecord ? listCharacterChatSessions(characterRecord, binding.charIndex) : [];
+      const session = sessions.find((s) => s.bindKey === viewBindKey);
+      if (session) {
+        return {
+          ...binding,
+          bindKey: session.bindKey,
+          bindKeyLegacy: session.bindKeyLegacy,
+          matchKeys: session.chatSessionId ? [session.bindKey, session.bindKeyLegacy] : [session.bindKey],
+          chatSessionId: session.chatSessionId || void 0,
+          chatIndex: session.chatIndex,
+          chatLabel: session.label,
+          label: `${binding.characterName} \xB7 ${session.label}`
+        };
+      }
+      return { ...binding, bindKey: viewBindKey, matchKeys: [viewBindKey] };
+    }
     function getBoundSecrets() {
-      if (!bindResult.ok || !binding?.bindKey) return [];
-      return filterSecretsForBinding(secrets, binding.bindKey);
+      const view = resolveViewBinding();
+      if (!bindResult.ok || !view?.bindKey) return [];
+      return filterSecretsForBinding(secrets, view);
     }
     if (edition === "full" && store.refreshHealth) {
       await store.refreshHealth();
@@ -2965,6 +3126,59 @@ textarea { min-height: 120px; resize: vertical; }
       root.appendChild(panels[id]);
     }
     root.insertBefore(tabs, panels.secrets);
+    const sessionBar = el3("div", { className: "veil-session-bar" });
+    if (binding && characterRecord) {
+      const sessions = listCharacterChatSessions(
+        characterRecord,
+        binding.charIndex
+      );
+      const stored = summarizeSecretSessions(secrets, binding.characterId);
+      const sessionSelect = el3("select", { className: "veil-select" });
+      for (const s of sessions) {
+        const storedEntry = stored.find((x) => x.bindKey === s.bindKey);
+        const count = storedEntry?.count || 0;
+        const opt = el3("option", {
+          value: s.bindKey,
+          text: `${s.label} (${count}\uAC1C)${s.chatSessionId ? "" : " \xB7 \uC778\uB371\uC2A4"}`
+        });
+        if (s.bindKey === viewBindKey) opt.selected = true;
+        sessionSelect.appendChild(opt);
+      }
+      sessionSelect.addEventListener("change", () => {
+        viewBindKey = sessionSelect.value;
+        renderSecretCards();
+      });
+      sessionBar.appendChild(
+        el3("label", { className: "veil-sub", text: "\uC138\uC158: " })
+      );
+      sessionBar.appendChild(sessionSelect);
+      sessionBar.appendChild(
+        el3("button", {
+          className: "btn btn-secondary",
+          text: "\uC774 \uC138\uC158 \uB370\uC774\uD130 \uC804\uCCB4 \uC0AD\uC81C",
+          onclick: async () => {
+            const view = resolveViewBinding();
+            const n = filterSecretsForBinding(secrets, view).length;
+            if (!n || !confirm(
+              `\uC774 \uCC44\uD305 \uC138\uC158\uC758 VEIL \uC2DC\uD06C\uB9BF ${n}\uAC1C\uB97C \uBAA8\uB450 \uC0AD\uC81C\uD560\uAE4C\uC694? \uB418\uB3CC\uB9B4 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.`
+            )) {
+              return;
+            }
+            removeSecretsForBinding(secrets, view);
+            await store.save(secrets);
+            renderSecretCards();
+          }
+        })
+      );
+      if (!binding.chatSessionId) {
+        sessionBar.appendChild(
+          el3("p", {
+            className: "veil-sub",
+            text: "\uC774 \uCC44\uD305\uC5D0 Risu chat.id\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4. \uCC44\uD305\uC744 \uD55C \uBC88 \uC800\uC7A5\xB7\uB3D9\uAE30\uD654\uD558\uBA74 cid \uD0A4\uB85C \uACE0\uC815\uB429\uB2C8\uB2E4."
+          })
+        );
+      }
+    }
     const secretsToolbar = el3("div", { className: "toolbar" });
     const importInput = el3("input", { type: "file", accept: "application/json,.json" });
     importInput.style.display = "none";
@@ -3010,6 +3224,7 @@ textarea { min-height: 120px; resize: vertical; }
         }
       })
     );
+    if (sessionBar.childNodes.length) panels.secrets.appendChild(sessionBar);
     panels.secrets.appendChild(secretsToolbar);
     panels.secrets.appendChild(importInput);
     importInput.addEventListener("change", async () => {
@@ -3077,10 +3292,38 @@ textarea { min-height: 120px; resize: vertical; }
         meta.appendChild(
           el3("span", {
             className: "badge",
-            text: secret.bindKey || `${secret.scopeType}:${secret.scopeId}`
+            text: secret.chatSessionId ? `cid:${String(secret.chatSessionId).slice(0, 8)}\u2026` : secret.bindKey || `${secret.scopeType}:${secret.scopeId}`
           })
         );
         card.appendChild(meta);
+        const actions = el3("div", { className: "row" });
+        actions.appendChild(
+          el3("button", {
+            className: "btn btn-secondary",
+            text: "\uC81C\uBAA9 \uC218\uC815",
+            onclick: async () => {
+              const next = prompt("\uC2DC\uD06C\uB9BF \uC81C\uBAA9", secret.title || "");
+              if (next == null || !next.trim()) return;
+              secret.title = next.trim();
+              secret.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+              await store.save(secrets);
+              renderSecretCards();
+            }
+          })
+        );
+        actions.appendChild(
+          el3("button", {
+            className: "btn btn-secondary",
+            text: "\uC0AD\uC81C",
+            onclick: async () => {
+              if (!confirm(`\u300C${maskTitle(secret)}\u300D \uC2DC\uD06C\uB9BF\uC744 \uC0AD\uC81C\uD560\uAE4C\uC694?`)) return;
+              removeSecretById(secrets, secret.id);
+              await store.save(secrets);
+              renderSecretCards();
+            }
+          })
+        );
+        card.appendChild(actions);
         const known = secret.knownBy?.length > 0 ? secret.knownBy.join(", ") : "(\uBBF8\uC9C0\uC815)";
         const unknown = secret.unknownBy?.length > 0 ? secret.unknownBy.join(", ") : "(\uC5C6\uC74C)";
         card.appendChild(

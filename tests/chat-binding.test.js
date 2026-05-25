@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   makeBindKey,
+  makeSessionBindKey,
   filterSecretsForBinding,
   attachChatBinding,
   migrateUnboundSecretsToBinding,
@@ -13,6 +14,32 @@ import {
 describe("chat binding", () => {
   it("makeBindKey encodes character and chat indices", () => {
     assert.equal(makeBindKey(2, 5), "2:5");
+  });
+
+  it("makeSessionBindKey uses Risu chat.id (cid)", () => {
+    assert.equal(
+      makeSessionBindKey("cha-uuid", "chat-uuid"),
+      "cid:cha-uuid:chat-uuid"
+    );
+  });
+
+  it("secretMatchesBinding accepts legacy index key when binding has cid", () => {
+    const binding = {
+      bindKey: "cid:c1:chat-1",
+      bindKeyLegacy: "0:1",
+      matchKeys: ["cid:c1:chat-1", "0:1"],
+      characterId: "c1",
+      chatSessionId: "chat-1",
+      charIndex: 0,
+      chatIndex: 1,
+      characterName: "A",
+      chatLabel: "B",
+      label: "A · B",
+    };
+    assert.equal(
+      secretMatchesBinding({ bindKey: "0:1", scopeType: "chat", scopeId: "0:1" }, binding),
+      true
+    );
   });
 
   it("filterSecretsForBinding returns only matching secrets", () => {
@@ -87,6 +114,38 @@ describe("chat binding", () => {
     assert.equal(result.ok, true);
     assert.equal(result.binding?.bindKey, "0:0");
     assert.equal(result.binding?.characterName, "Yuki");
+  });
+
+  it("resolveChatBindingSafe prefers cid bind key when chat.id exists", async () => {
+    const Risuai = {
+      async getCurrentCharacterIndex() {
+        return 0;
+      },
+      async getCurrentChatIndex() {
+        return 1;
+      },
+      async getDatabase() {
+        return {
+          characters: [
+            {
+              chaId: "char-abc",
+              name: "Mira",
+              chatPage: 0,
+              chats: [
+                { name: "First", id: "session-a" },
+                { name: "Second", id: "session-b" },
+              ],
+              globalLore: [],
+            },
+          ],
+        };
+      },
+    };
+    const result = await resolveChatBindingSafe(Risuai);
+    assert.equal(result.ok, true);
+    assert.equal(result.binding?.bindKey, "cid:char-abc:session-b");
+    assert.equal(result.binding?.bindKeyLegacy, "0:1");
+    assert.equal(result.binding?.chatSessionId, "session-b");
   });
 
   it("migrateUnboundSecretsToBinding only when none bound", () => {
