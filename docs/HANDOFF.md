@@ -161,7 +161,7 @@ Lite·Full 공통: `get_reveal_guidance`, `check_disclosure`, `redact_to_allowed
 - 앱 전역 db.loreBook 페이지 미스캔 (캐릭터 globalLore만)
 - Vertex 토큰: 브라우저에서 JWT 교환 (서비스 계정 JSON)
 - MCP에 bind_key 자동 주입은 Risu가 호출 시 넣어줘야 함 (플러그인은 resolveChatBindingSafe로 보완)
-- 시크릿 편집 UI (추가/삭제 폼) 미구현 — import·스캔·샘플 위주
+- GUI에서 시크릿 **새로 만들기**(빈 폼)는 미구현 — import·스캔·샘플 위주
 - redact/semantic: sidecar·LLM 실패 시 플러그인 휴리스틱만
 ```
 
@@ -191,6 +191,12 @@ chore: bundle ...
 `npm run bundle` 변경이 있으면 같은 PR/커밋에 `veil-lite.js` / `veil-full.js` 포함.
 
 ---
+
+## Releases
+
+- 베타 릴리스 노트: [docs/RELEASE-v0.1.0-beta.md](RELEASE-v0.1.0-beta.md)
+- 버전 상수: [shared/plugin-meta.js](../shared/plugin-meta.js) → `npm run version:sync <ver>` → `npm run bundle`
+- 대시보드 헤더 **v0.1.0-beta** 칩으로 로드 버전 확인
 
 ## GitHub Releases (Actions)
 

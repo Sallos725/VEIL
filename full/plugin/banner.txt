@@ -1,5 +1,5 @@
 //@name veil_full
-//@version 0.0.1
+//@version 0.1.0-beta
 //@api 3.0
 //@display-name VEIL Full
 //@update-url https://raw.githubusercontent.com/Sallos725/VEIL/main/full/plugin/veil-full.js

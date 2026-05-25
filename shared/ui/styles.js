@@ -26,6 +26,13 @@ body {
 .veil-title { font-size: 1.25rem; font-weight: 700; margin: 0; }
 .veil-sub { font-size: 0.85rem; color: #9aa0b8; margin: 4px 0 0; }
 .veil-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip-version {
+  border-color: #5a8fd4;
+  background: #1a2840;
+  color: #b8d4ff;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
 .chip {
   padding: 4px 10px;
   border-radius: 999px;

@@ -37,6 +37,7 @@ import {
   mergeSessionImport,
 } from "../storage/session-secrets.js";
 import { attachSecretEditorToCard } from "./secret-editor.js";
+import { VEIL_DISPLAY_VERSION } from "../plugin-meta.js";
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -146,6 +147,19 @@ export async function openDashboard(doc, ctx) {
     }),
   ]);
   const chips = el("div", { className: "veil-chips" });
+  chips.appendChild(
+    el("span", {
+      className: "chip chip-version",
+      text: VEIL_DISPLAY_VERSION,
+      title: "VEIL 플러그인 버전",
+    })
+  );
+  chips.appendChild(
+    el("span", {
+      className: "chip",
+      text: edition === "full" ? "Full" : "Lite",
+    })
+  );
   const storageChip = el("span", {
     className: "chip",
     text: `저장: ${sourceLabelKo(status.source)}`,

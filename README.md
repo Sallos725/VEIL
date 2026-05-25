@@ -8,6 +8,7 @@ RisuAI JavaScript plugin for staged secret disclosure, knowledge boundaries, and
 |-----|----------|
 | [AGENTS.md](AGENTS.md) | Design spec, MCP contracts, reveal stages |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | **Contributors:** layout, commands, what's done, what's next |
+| [docs/RELEASE-v0.1.0-beta.md](docs/RELEASE-v0.1.0-beta.md) | **Beta install** and known limits |
 
 ## Editions
 

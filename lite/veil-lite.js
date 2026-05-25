@@ -1,9 +1,10 @@
 //@name veil_lite
-//@version 0.0.1
+//@version 0.1.0-beta
 //@api 3.0
 //@display-name VEIL Lite
 //@update-url https://raw.githubusercontent.com/Sallos725/VEIL/main/lite/veil-lite.js
 //@link https://github.com/Sallos725/VEIL VEIL — GitHub
+//@link https://github.com/Sallos725/VEIL/blob/main/docs/HANDOFF.md 설치·사용 가이드
 //@arg sidecar_url string Optional VEIL sidecar URL (LLM·스캔은 GUI 「LLM 설정」 탭 권장)
 
 (() => {
@@ -1793,6 +1794,13 @@ body {
 .veil-title { font-size: 1.25rem; font-weight: 700; margin: 0; }
 .veil-sub { font-size: 0.85rem; color: #9aa0b8; margin: 4px 0 0; }
 .veil-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip-version {
+  border-color: #5a8fd4;
+  background: #1a2840;
+  color: #b8d4ff;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
 .chip {
   padding: 4px 10px;
   border-radius: 999px;
@@ -3267,6 +3275,9 @@ textarea { min-height: 120px; resize: vertical; }
     card.appendChild(details);
   }
 
+  // shared/plugin-meta.js
+  var VEIL_DISPLAY_VERSION = "v0.1.0-beta";
+
   // shared/ui/dashboard.js
   function el4(tag, attrs = {}, children = []) {
     const node = document.createElement(tag);
@@ -3363,6 +3374,19 @@ textarea { min-height: 120px; resize: vertical; }
       })
     ]);
     const chips = el4("div", { className: "veil-chips" });
+    chips.appendChild(
+      el4("span", {
+        className: "chip chip-version",
+        text: VEIL_DISPLAY_VERSION,
+        title: "VEIL \uD50C\uB7EC\uADF8\uC778 \uBC84\uC804"
+      })
+    );
+    chips.appendChild(
+      el4("span", {
+        className: "chip",
+        text: edition === "full" ? "Full" : "Lite"
+      })
+    );
     const storageChip = el4("span", {
       className: "chip",
       text: `\uC800\uC7A5: ${sourceLabelKo(status.source)}`
